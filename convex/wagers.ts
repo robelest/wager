@@ -258,75 +258,16 @@ export const getRecentWagers = query({
   },
 });
 
-// Discord API guild response type
-interface DiscordGuild {
-  id: string;
-  name: string;
-  icon: string | null;
-}
-
-// Server response type for frontend
-interface ServerInfo {
-  guildId: string;
-  guildName: string;
-  points: number;
-  totalBets: number;
-  correctBets: number;
-}
-
-// Get user's available Discord servers (for wager creation dropdown)
-// Returns only servers where BOTH the user AND the bot are members
-export const getMyServers = action({
+// Get all guild IDs where the bot is installed (for client-side filtering)
+export const getBotServerIds = query({
   args: {},
-  handler: async (ctx): Promise<ServerInfo[]> => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) return [];
-
-    // Get all servers where the bot is present
-    const botServers = await ctx.runQuery(internal.wagers.getAllBotServers);
-    if (botServers.length === 0) return [];
-
-    // Create a set of bot server IDs for fast lookup
-    const botServerIds = new Set(botServers.map((s) => s.guildId));
-
-    // Fetch user's Discord guilds using their OAuth access token
-    const userGuilds: DiscordGuild[] = await ctx.runAction(api.auth.getMyDiscordGuilds);
-
-    // Filter to only servers where both user and bot are present
-    const matchingGuildIds: string[] = userGuilds
-      .filter((g: DiscordGuild) => botServerIds.has(g.id))
-      .map((g: DiscordGuild) => g.id);
-
-    if (matchingGuildIds.length === 0) return [];
-
-    // Get user's stats for these servers
-    const serverStats = await ctx.runQuery(internal.wagers.getUserServerStatsForGuilds, {
-      betterAuthUserId: identity.subject,
-      guildIds: matchingGuildIds,
-    });
-
-    // Build the response with server info and stats
-    const serverMap = new Map(botServers.map((s) => [s.guildId, s]));
-    const statsMap = new Map(serverStats.map((s) => [s.guildId, s]));
-    const userGuildMap = new Map<string, DiscordGuild>(userGuilds.map((g: DiscordGuild) => [g.id, g]));
-
-    return matchingGuildIds.map((guildId: string): ServerInfo => {
-      const server = serverMap.get(guildId)!;
-      const userGuild = userGuildMap.get(guildId);
-      const stats = statsMap.get(guildId);
-      return {
-        guildId: server.guildId,
-        // Prefer Discord API name over our stored name (which might be "Unknown Server")
-        guildName: userGuild?.name || server.guildName,
-        points: stats?.points ?? 100,
-        totalBets: stats?.totalBets ?? 0,
-        correctBets: stats?.correctBets ?? 0,
-      };
-    });
+  handler: async (ctx): Promise<string[]> => {
+    const servers = await ctx.db.query("discordServers").collect();
+    return servers.map((s) => s.guildId);
   },
 });
 
-// Internal query to get all bot servers
+// Internal query to get all bot servers (with full details)
 export const getAllBotServers = internalQuery({
   args: {},
   handler: async (ctx) => {

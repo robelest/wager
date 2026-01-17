@@ -1,7 +1,7 @@
 "use client";
 
 import { createFileRoute, redirect, useNavigate } from "@tanstack/react-router";
-import { useSession } from "~/lib/auth-client";
+import { useSession, authClient } from "~/lib/auth-client";
 import { PageWrapper } from "~/components/layout";
 import { WagerForm, type WagerFormData, type DiscordServer } from "~/components/wager";
 import { Button } from "~/components/ui/button";
@@ -9,7 +9,7 @@ import { useState, useEffect } from "react";
 import { toast } from "sonner";
 import { ArrowLeftIcon } from "~/components/ui/arrow-left";
 import { Link } from "@tanstack/react-router";
-import { useAction, useMutation } from "convex/react";
+import { useQuery, useMutation } from "convex/react";
 import { api } from "convex/_generated/api";
 
 export const Route = createFileRoute("/wager/new")({
@@ -28,18 +28,60 @@ function NewWagerPage() {
   const [servers, setServers] = useState<DiscordServer[]>([]);
   const [isLoadingServers, setIsLoadingServers] = useState(true);
 
-  // Action to fetch user's Discord servers (filtered to ones they're in)
-  const getMyServers = useAction(api.wagers.getMyServers);
+  // Query to get bot server IDs (for filtering)
+  const botServerIds = useQuery(api.wagers.getBotServerIds);
 
   // Mutation to create wager
   const createWager = useMutation(api.wagers.createWagerFromWeb);
 
-  // Fetch servers on mount
+  // Fetch Discord guilds client-side and filter to bot servers
   useEffect(() => {
     async function fetchServers() {
+      // Wait for bot server IDs to load
+      if (botServerIds === undefined) return;
+
       try {
-        const result = await getMyServers();
-        setServers(result);
+        const botServerSet = new Set(botServerIds);
+
+        // Get Discord access token from Better Auth client
+        const tokenResult = await authClient.getAccessToken({
+          providerId: "discord",
+        });
+
+        if (!tokenResult?.accessToken) {
+          console.error("No Discord access token available");
+          toast.error("Failed to load servers", {
+            description: "Could not get Discord access. Try signing out and back in.",
+          });
+          setIsLoadingServers(false);
+          return;
+        }
+
+        // Fetch user's guilds directly from Discord API
+        const response = await fetch("https://discord.com/api/v10/users/@me/guilds", {
+          headers: {
+            Authorization: `Bearer ${tokenResult.accessToken}`,
+          },
+        });
+
+        if (!response.ok) {
+          throw new Error("Failed to fetch Discord guilds");
+        }
+
+        const guilds = await response.json();
+
+        // Filter to only guilds where bot is installed
+        const filteredServers: DiscordServer[] = guilds
+          .filter((g: { id: string }) => botServerSet.has(g.id))
+          .map((g: { id: string; name: string }) => ({
+            guildId: g.id,
+            guildName: g.name,
+            points: 0,
+            totalBets: 0,
+            correctBets: 0,
+          }));
+
+        setServers(filteredServers);
       } catch (error) {
         console.error("Failed to fetch servers:", error);
         toast.error("Failed to load servers", {
@@ -49,8 +91,9 @@ function NewWagerPage() {
         setIsLoadingServers(false);
       }
     }
+
     fetchServers();
-  }, [getMyServers]);
+  }, [botServerIds]);
 
   if (!session?.user) {
     return null;
