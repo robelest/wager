@@ -5,13 +5,12 @@ import { Avatar, AvatarFallback, AvatarImage } from "~/components/ui/avatar";
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuLabel,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "~/components/ui/dropdown-menu";
-import { LayoutDashboard, User, Settings, LogOut } from "lucide-react";
-import { Link } from "@tanstack/react-router";
+import { LogOut } from "lucide-react";
 
 interface UserType {
   id: string;
@@ -46,45 +45,55 @@ export function UserMenu({ user }: UserMenuProps) {
 
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger className="relative h-9 w-9 rounded-full ring-2 ring-border hover:ring-primary/50 transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-primary">
-        <Avatar size="default">
-          {user.image && <AvatarImage src={user.image} alt={user.name || ""} />}
-          <AvatarFallback className="bg-primary/20 text-primary font-medium">
+      <DropdownMenuTrigger className="group relative h-10 w-10 rounded-full ring-2 ring-border/60 hover:ring-primary/60 transition-all duration-300 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary shadow-sm hover:shadow-md">
+        <Avatar size="default" className="h-10 w-10">
+          {user.image && <AvatarImage src={user.image} alt={user.name || ""} className="object-cover" />}
+          <AvatarFallback className="bg-gradient-to-br from-primary/25 to-accent/20 text-primary font-display font-semibold text-sm">
             {initials}
           </AvatarFallback>
         </Avatar>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-56">
-        <DropdownMenuLabel className="font-normal">
-          <div className="flex flex-col space-y-1">
-            <p className="text-sm font-medium leading-none">{user.name}</p>
-            <p className="text-xs text-muted-foreground leading-none">
-              {user.email}
-            </p>
+      <DropdownMenuContent
+        align="end"
+        sideOffset={8}
+        className="w-56 p-0 overflow-hidden border-border/50 shadow-xl"
+      >
+        {/* User Info Header */}
+        <DropdownMenuGroup>
+          <div className="px-3 py-3 border-b border-border/30">
+            <div className="flex items-center gap-3">
+              <Avatar size="default" className="h-9 w-9 ring-1 ring-border/50">
+                {user.image && <AvatarImage src={user.image} alt={user.name || ""} className="object-cover" />}
+                <AvatarFallback className="bg-gradient-to-br from-primary/20 to-accent/15 text-primary font-display font-semibold text-xs">
+                  {initials}
+                </AvatarFallback>
+              </Avatar>
+              <div className="flex flex-col min-w-0">
+                <span className="font-display font-medium text-sm text-foreground truncate">
+                  {user.name || "User"}
+                </span>
+                <span className="text-xs text-muted-foreground truncate">
+                  {user.email}
+                </span>
+              </div>
+            </div>
           </div>
-        </DropdownMenuLabel>
-        <DropdownMenuSeparator />
-        <DropdownMenuItem render={<Link to="/dashboard" />} className="cursor-pointer">
-          <LayoutDashboard className="size-4 mr-2" />
-          Dashboard
-        </DropdownMenuItem>
-        <DropdownMenuItem render={<Link to="/profile" />} className="cursor-pointer">
-          <User className="size-4 mr-2" />
-          Profile
-        </DropdownMenuItem>
-        <DropdownMenuItem render={<Link to="/settings" />} className="cursor-pointer">
-          <Settings className="size-4 mr-2" />
-          Settings
-        </DropdownMenuItem>
-        <DropdownMenuSeparator />
-        <DropdownMenuItem
-          onClick={handleSignOut}
-          variant="destructive"
-          className="cursor-pointer"
-        >
-          <LogOut className="size-4 mr-2" />
-          Sign out
-        </DropdownMenuItem>
+          <DropdownMenuLabel className="sr-only">User Account</DropdownMenuLabel>
+        </DropdownMenuGroup>
+
+        {/* Sign Out */}
+        <DropdownMenuGroup>
+          <div className="p-1.5">
+            <DropdownMenuItem
+              onClick={handleSignOut}
+              variant="destructive"
+              className="cursor-pointer rounded-md px-3 py-2 gap-2 transition-colors duration-150"
+            >
+              <LogOut className="size-4" />
+              <span className="font-medium text-sm">Sign out</span>
+            </DropdownMenuItem>
+          </div>
+        </DropdownMenuGroup>
       </DropdownMenuContent>
     </DropdownMenu>
   );

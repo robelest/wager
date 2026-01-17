@@ -87,25 +87,18 @@ export function WagerForm({
 
   const progress = ((currentStep + 1) / steps.length) * 100;
 
-  const canProceed = () => {
-    const values = form.state.values;
-    switch (currentStep) {
-      case 0: // Server selection
-        return values.guildId.length > 0;
-      case 1: // Task
-        return values.task.length >= 10 && values.task.length <= 200;
-      case 2: // Consequence
-        return values.consequence.length >= 10 && values.consequence.length <= 200;
-      case 3: // Deadline
-        return values.deadlineHours >= 1 && values.deadlineHours <= 168;
-      case 4: // Confirm
-        return true;
-      default:
-        return false;
-    }
-  };
+  const handleNext = (values: typeof form.state.values) => {
+    const canProceed = () => {
+      switch (currentStep) {
+        case 0: return values.guildId.length > 0;
+        case 1: return values.task.length >= 10 && values.task.length <= 200;
+        case 2: return values.consequence.length >= 10 && values.consequence.length <= 200;
+        case 3: return values.deadlineHours >= 1 && values.deadlineHours <= 168;
+        case 4: return true;
+        default: return false;
+      }
+    };
 
-  const handleNext = () => {
     if (currentStep < steps.length - 1 && canProceed()) {
       setCurrentStep(currentStep + 1);
     }
@@ -375,41 +368,58 @@ export function WagerForm({
             </div>
           )}
 
-          {/* Navigation */}
-          <div className="flex justify-between pt-6 mt-6 border-t border-border/50">
-            <Button
-              type="button"
-              variant="ghost"
-              onClick={handleBack}
-              disabled={currentStep === 0}
-              className="gap-2"
-            >
-              <ArrowLeftIcon size={16} />
-              Back
-            </Button>
+          {/* Navigation - wrapped in Subscribe for reactive button state */}
+          <form.Subscribe selector={(state) => state.values}>
+            {(values) => {
+              const canProceed = () => {
+                switch (currentStep) {
+                  case 0: return values.guildId.length > 0;
+                  case 1: return values.task.length >= 10 && values.task.length <= 200;
+                  case 2: return values.consequence.length >= 10 && values.consequence.length <= 200;
+                  case 3: return values.deadlineHours >= 1 && values.deadlineHours <= 168;
+                  case 4: return true;
+                  default: return false;
+                }
+              };
 
-            {currentStep < steps.length - 1 ? (
-              <Button
-                type="button"
-                onClick={handleNext}
-                disabled={!canProceed()}
-                className="gap-2"
-              >
-                Next
-                <ArrowRightIcon size={16} />
-              </Button>
-            ) : (
-              <Button
-                type="button"
-                onClick={handleSubmit}
-                disabled={isSubmitting || !canProceed()}
-                className="gap-2 glow-primary"
-              >
-                {isSubmitting ? "Creating..." : "Create Wager"}
-                <CircleCheckIcon size={16} />
-              </Button>
-            )}
-          </div>
+              return (
+                <div className="flex justify-between pt-6 mt-6 border-t border-border/50">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    onClick={handleBack}
+                    disabled={currentStep === 0}
+                    className="gap-2"
+                  >
+                    <ArrowLeftIcon size={16} />
+                    Back
+                  </Button>
+
+                  {currentStep < steps.length - 1 ? (
+                    <Button
+                      type="button"
+                      onClick={() => handleNext(values)}
+                      disabled={!canProceed()}
+                      className="gap-2"
+                    >
+                      Next
+                      <ArrowRightIcon size={16} />
+                    </Button>
+                  ) : (
+                    <Button
+                      type="button"
+                      onClick={handleSubmit}
+                      disabled={isSubmitting || !canProceed()}
+                      className="gap-2 glow-primary"
+                    >
+                      {isSubmitting ? "Creating..." : "Create Wager"}
+                      <CircleCheckIcon size={16} />
+                    </Button>
+                  )}
+                </div>
+              );
+            }}
+          </form.Subscribe>
         </CardContent>
       </Card>
     </div>

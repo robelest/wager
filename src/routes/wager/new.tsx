@@ -1,7 +1,7 @@
 "use client";
 
 import { createFileRoute, redirect, useNavigate } from "@tanstack/react-router";
-import { useSession, authClient } from "~/lib/auth-client";
+import { useSession } from "~/lib/auth-client";
 import { PageWrapper } from "~/components/layout";
 import { WagerForm, type WagerFormData, type DiscordServer } from "~/components/wager";
 import { Button } from "~/components/ui/button";
@@ -9,7 +9,7 @@ import { useState, useEffect } from "react";
 import { toast } from "sonner";
 import { ArrowLeftIcon } from "~/components/ui/arrow-left";
 import { Link } from "@tanstack/react-router";
-import { useQuery, useMutation } from "convex/react";
+import { useQuery, useMutation, useAction } from "convex/react";
 import { api } from "convex/_generated/api";
 
 export const Route = createFileRoute("/wager/new")({
@@ -34,6 +34,9 @@ function NewWagerPage() {
   // Mutation to create wager
   const createWager = useMutation(api.wagers.createWagerFromWeb);
 
+  // Action to get Discord access token
+  const getDiscordToken = useAction(api.auth.getDiscordAccessToken);
+
   // Fetch Discord guilds client-side and filter to bot servers
   useEffect(() => {
     async function fetchServers() {
@@ -43,15 +46,13 @@ function NewWagerPage() {
       try {
         const botServerSet = new Set(botServerIds);
 
-        // Get Discord access token from Better Auth client
-        const tokenResult = await authClient.getAccessToken({
-          providerId: "discord",
-        });
+        // Get Discord access token from Convex (queries Better Auth account table)
+        const tokenResult = await getDiscordToken();
 
-        if (!tokenResult?.accessToken) {
-          console.error("No Discord access token available");
-          toast.error("Failed to load servers", {
-            description: "Could not get Discord access. Try signing out and back in.",
+        if (!tokenResult.accessToken) {
+          console.error("Discord token error:", tokenResult.error);
+          toast.error("Discord access unavailable", {
+            description: tokenResult.error || "Please sign out and back in.",
           });
           setIsLoadingServers(false);
           return;
@@ -93,7 +94,7 @@ function NewWagerPage() {
     }
 
     fetchServers();
-  }, [botServerIds]);
+  }, [botServerIds, getDiscordToken]);
 
   if (!session?.user) {
     return null;

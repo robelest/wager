@@ -24,6 +24,7 @@ export const createAuth = (ctx: any) => {
         clientId: process.env.DISCORD_CLIENT_ID!,
         clientSecret: process.env.DISCORD_CLIENT_SECRET!,
         scope: ["identify", "guilds"], // Request guilds scope for server discovery
+        prompt: "consent", // Force consent screen to ensure refresh token is issued
       },
     },
     plugins: [convex({ authConfig })],
@@ -36,6 +37,35 @@ export const getCurrentUser = query({
   handler: async (ctx) => {
     // Type cast needed due to Better Auth's generic context type
     return await authComponent.getAuthUser(ctx as any);
+  },
+});
+
+// Get Discord access token for the current user (for client-side Discord API calls)
+export const getDiscordAccessToken = action({
+  args: {},
+  handler: async (ctx): Promise<{ accessToken: string | null; error?: string }> => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) {
+      return { accessToken: null, error: "Not authenticated" };
+    }
+
+    // Query Better Auth's account table directly
+    const account = await ctx.runQuery(components.betterAuth.adapter.findOne, {
+      model: "account",
+      where: [
+        { field: "providerId", operator: "eq", value: "discord" },
+        { field: "userId", operator: "eq", value: identity.subject },
+      ],
+    });
+
+    if (!account) {
+      return { accessToken: null, error: "No Discord account found" };
+    }
+
+    return {
+      accessToken: account.accessToken || null,
+      error: account.accessToken ? undefined : "Token not stored",
+    };
   },
 });
 
