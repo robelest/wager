@@ -9,7 +9,7 @@ import { useState, useEffect } from "react";
 import { toast } from "sonner";
 import { ArrowLeftIcon } from "~/components/ui/arrow-left";
 import { Link } from "@tanstack/react-router";
-import { useQuery, useMutation, useAction } from "convex/react";
+import { useQuery, useAction } from "convex/react";
 import { api } from "convex/_generated/api";
 
 export const Route = createFileRoute("/wager/new")({
@@ -31,8 +31,8 @@ function NewWagerPage() {
   // Query to get bot server IDs (for filtering)
   const botServerIds = useQuery(api.wagers.getBotServerIds);
 
-  // Mutation to create wager
-  const createWager = useMutation(api.wagers.createWagerFromWeb);
+  // Action to create wager
+  const createWager = useAction(api.wagers.createWagerFromWeb);
 
   // Action to get Discord access token
   const getDiscordToken = useAction(api.auth.getDiscordAccessToken);

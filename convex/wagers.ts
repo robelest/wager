@@ -7,7 +7,7 @@ import {
   internalQuery,
 } from "./_generated/server";
 import { v } from "convex/values";
-import { internal, api } from "./_generated/api";
+import { internal, api, components } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 
 // ═══════════════════════════════════════════════════════════════
@@ -303,32 +303,30 @@ export const getUserServerStatsForGuilds = internalQuery({
   },
 });
 
-// Create a wager from the web app
-export const createWagerFromWeb = mutation({
+// Internal mutation to create wager (called by action after user lookup)
+export const createWagerInternal = internalMutation({
   args: {
+    discordId: v.string(),
+    betterAuthUserId: v.string(),
     guildId: v.string(),
     task: v.string(),
     consequence: v.string(),
     deadlineHours: v.number(),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) {
-      throw new Error("Not authenticated");
-    }
-
-    // Find user by Better Auth ID
+    // Find user by Discord ID
     let user = await ctx.db
       .query("users")
-      .withIndex("by_betterAuthUserId", (q) =>
-        q.eq("betterAuthUserId", identity.subject)
-      )
+      .withIndex("by_discordId", (q) => q.eq("discordId", args.discordId))
       .unique();
 
     if (!user) {
-      // User exists in Better Auth but not in our users table yet
-      // This can happen if they signed up via web but never used Discord
-      throw new Error("Please use /wager in Discord first to set up your account");
+      throw new Error("User not found. Please use /wager in Discord first.");
+    }
+
+    // Link Better Auth ID if not already linked
+    if (user.betterAuthUserId !== args.betterAuthUserId) {
+      await ctx.db.patch(user._id, { betterAuthUserId: args.betterAuthUserId });
     }
 
     // Verify the server exists and bot is present
@@ -386,7 +384,48 @@ export const createWagerFromWeb = mutation({
       userId: user._id,
     });
 
-    return { wagerId, userId: user._id };
+    return { wagerId, oddsmakerDiscordId: user._id };
+  },
+});
+
+// Create a wager from the web app
+export const createWagerFromWeb = action({
+  args: {
+    guildId: v.string(),
+    task: v.string(),
+    consequence: v.string(),
+    deadlineHours: v.number(),
+  },
+  handler: async (ctx, args): Promise<{ wagerId: Id<"wagers">; oddsmakerDiscordId: Id<"users"> }> => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) {
+      throw new Error("Not authenticated");
+    }
+
+    // Get Discord ID from Better Auth account table
+    const account = await ctx.runQuery(components.betterAuth.adapter.findOne, {
+      model: "account",
+      where: [
+        { field: "providerId", operator: "eq", value: "discord" },
+        { field: "userId", operator: "eq", value: identity.subject },
+      ],
+    });
+
+    if (!account?.accountId) {
+      throw new Error("Discord account not found. Please sign in with Discord.");
+    }
+
+    // Create the wager via internal mutation
+    const result = await ctx.runMutation(internal.wagers.createWagerInternal, {
+      discordId: account.accountId as string,
+      betterAuthUserId: identity.subject,
+      guildId: args.guildId,
+      task: args.task,
+      consequence: args.consequence,
+      deadlineHours: args.deadlineHours,
+    });
+
+    return { wagerId: result.wagerId, oddsmakerDiscordId: result.oddsmakerDiscordId };
   },
 });
 
