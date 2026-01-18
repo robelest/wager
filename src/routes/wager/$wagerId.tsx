@@ -2,7 +2,7 @@
 
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { PageWrapper } from "~/components/layout";
-import { CountdownTimer, ProofUploader } from "~/components/wager";
+import { CountdownTimer, ProofUploader, BettingSection } from "~/components/wager";
 import { Card, CardContent, CardHeader, CardTitle } from "~/components/ui/card";
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
@@ -15,10 +15,20 @@ import { toast } from "sonner";
 import { ArrowLeftIcon } from "~/components/ui/arrow-left";
 import { CircleCheckIcon } from "~/components/ui/circle-check";
 import { ClockIcon } from "~/components/ui/clock";
-import { AlertCircle, XCircle, User, Calendar, Volume2, Server } from "lucide-react";
+import { AlertCircle, XCircle, User, Calendar, Volume2, Server, Flag } from "lucide-react";
 import { useQuery, useMutation } from "convex/react";
 import { api } from "convex/_generated/api";
 import type { Id } from "convex/_generated/dataModel";
+
+// Helper to get display task (handles multi-task wagers)
+function getWagerTask(wager: { task?: string; wagerTitle?: string }): string {
+  return wager.task || wager.wagerTitle || "Unknown task";
+}
+
+// Helper to get deadline (handles multi-task wagers)
+function getWagerDeadline(wager: { deadline?: number; finalDeadline?: number }): number {
+  return wager.deadline || wager.finalDeadline || Date.now();
+}
 
 export const Route = createFileRoute("/wager/$wagerId")({
   component: WagerDetailPage,
@@ -56,6 +66,8 @@ function WagerDetailPage() {
   const { wagerId } = Route.useParams();
   const [isUploading, setIsUploading] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [isForfeiting, setIsForfeiting] = useState(false);
+  const [showForfeitConfirm, setShowForfeitConfirm] = useState(false);
 
   // Fetch wager with details
   const wagerData = useQuery(api.wagers.getWagerWithDetails, {
@@ -65,9 +77,10 @@ function WagerDetailPage() {
   const wager = wagerData;
   const isOwner = wagerData?.isOwner ?? false;
 
-  // Mutations for proof upload
+  // Mutations for proof upload and forfeit
   const generateUploadUrl = useMutation(api.wagers.generateProofUploadUrl);
   const submitProof = useMutation(api.wagers.submitProofFromWeb);
+  const forfeitWager = useMutation(api.wagers.forfeitWager);
 
   if (isLoading) {
     return <WagerDetailSkeleton />;
@@ -92,6 +105,24 @@ function WagerDetailPage() {
   const config = statusConfig[wager.status as keyof typeof statusConfig];
   const userName = wager.user?.name || "Unknown User";
   const userAvatar = wager.user?.avatar;
+
+  const handleForfeit = async () => {
+    setIsForfeiting(true);
+    try {
+      await forfeitWager({ wagerId: wagerId as Id<"wagers"> });
+      toast.success("Wager forfeited", {
+        description: "This wager has been marked as failed.",
+      });
+      setShowForfeitConfirm(false);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "Please try again.";
+      toast.error("Failed to forfeit", {
+        description: errorMessage,
+      });
+    } finally {
+      setIsForfeiting(false);
+    }
+  };
 
   const handleProofUpload = async (file: File) => {
     setIsUploading(true);
@@ -143,7 +174,7 @@ function WagerDetailPage() {
         </Link>
 
         {/* Hero Header */}
-        <div className="relative overflow-hidden rounded-2xl border border-border/50 bg-card/50 backdrop-blur-sm p-6 sm:p-8">
+        <div className="relative overflow-hidden rounded-sm border border-border/50 bg-card/50 backdrop-blur-sm p-6 sm:p-8">
           {/* Status bar */}
           <div
             className={cn(
@@ -195,13 +226,50 @@ function WagerDetailPage() {
           <h1 className="text-2xl sm:text-3xl font-bold mb-4">{wager.task}</h1>
 
           {/* Consequence */}
-          <div className="rounded-lg border border-border/50 bg-background/50 p-4">
+          <div className="rounded-sm border border-border/50 bg-background/50 p-4">
             <div className="flex items-center gap-2 text-sm text-muted-foreground mb-2">
               <AlertCircle className="size-4" />
               <span>If failed:</span>
             </div>
             <p className="text-foreground">{wager.consequence}</p>
           </div>
+
+          {/* Forfeit Button - Only for owner of active wagers */}
+          {wager.status === "active" && isOwner && (
+            <div className="mt-4 pt-4 border-t border-border/30">
+              {!showForfeitConfirm ? (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="text-muted-foreground hover:text-destructive"
+                  onClick={() => setShowForfeitConfirm(true)}
+                >
+                  <Flag className="size-4 mr-2" />
+                  Give Up
+                </Button>
+              ) : (
+                <div className="flex items-center gap-3">
+                  <span className="text-sm text-muted-foreground">Are you sure? This counts as a failure.</span>
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    onClick={handleForfeit}
+                    disabled={isForfeiting}
+                  >
+                    {isForfeiting ? "Forfeiting..." : "Yes, Forfeit"}
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setShowForfeitConfirm(false)}
+                    disabled={isForfeiting}
+                  >
+                    Cancel
+                  </Button>
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Countdown Timer - Only for active wagers */}
@@ -211,7 +279,7 @@ function WagerDetailPage() {
               <CardTitle className="text-base text-muted-foreground">Time Remaining</CardTitle>
             </CardHeader>
             <CardContent>
-              <CountdownTimer deadline={wager.deadline} size="lg" />
+              <CountdownTimer deadline={getWagerDeadline(wager)} size="lg" />
             </CardContent>
           </Card>
         )}
@@ -224,6 +292,17 @@ function WagerDetailPage() {
               onUpload={handleProofUpload}
               isUploading={isUploading}
               currentProofUrl={wager.proofImageUrl}
+              verificationFailed={wager.verificationResult ? !wager.verificationResult.passed : false}
+            />
+          )}
+
+          {/* Betting Section */}
+          {wager.guildId && (
+            <BettingSection
+              wagerId={wagerId as Id<"wagers">}
+              guildId={wager.guildId}
+              isOwner={isOwner}
+              wagerStatus={wager.status}
             />
           )}
 
@@ -243,7 +322,7 @@ function WagerDetailPage() {
               <CardContent>
                 <div
                   className={cn(
-                    "rounded-lg p-4",
+                    "rounded-sm p-4",
                     wager.verificationResult.passed
                       ? "bg-success/10 border border-success/20"
                       : "bg-destructive/10 border border-destructive/20"
@@ -328,7 +407,7 @@ function WagerDetailPage() {
               <InfoRow
                 icon="clock"
                 label="Deadline"
-                value={new Date(wager.deadline).toLocaleDateString("en-US", {
+                value={new Date(getWagerDeadline(wager)).toLocaleDateString("en-US", {
                   weekday: "long",
                   year: "numeric",
                   month: "long",
@@ -396,7 +475,7 @@ function WagerDetailSkeleton() {
     <PageWrapper maxWidth="lg">
       <div className="space-y-6">
         <Skeleton className="h-8 w-32" />
-        <Skeleton className="h-64 rounded-2xl" />
+        <Skeleton className="h-64 rounded-sm" />
         <Skeleton className="h-32" />
         <div className="grid gap-6 lg:grid-cols-2">
           <Skeleton className="h-64" />

@@ -3,15 +3,13 @@
 import { Card, CardContent, CardHeader, CardTitle } from "~/components/ui/card";
 import { Progress } from "~/components/ui/progress";
 import { cn } from "~/lib/utils";
-import { FlameIcon } from "~/components/ui/flame";
-import { BarChart3, Target, Trophy } from "lucide-react";
+import { BarChart3, Target, Trophy, Clock } from "lucide-react";
 
 interface UserStats {
   totalWagers: number;
   completedWagers: number;
   failedWagers: number;
-  currentStreak: number;
-  longestStreak: number;
+  activeWagers: number;
 }
 
 interface StatsPanelProps {
@@ -24,8 +22,6 @@ export function StatsPanel({ stats, className }: StatsPanelProps) {
     stats.totalWagers > 0
       ? Math.round((stats.completedWagers / stats.totalWagers) * 100)
       : 0;
-
-  const activeWagers = stats.totalWagers - stats.completedWagers - stats.failedWagers;
 
   return (
     <Card className={cn("border-border bg-card", className)}>
@@ -82,21 +78,21 @@ export function StatsPanel({ stats, className }: StatsPanelProps) {
             value={stats.completedWagers}
             iconColor="text-success"
           />
-          <StatBoxAnimated
-            label="Current Streak"
-            value={stats.currentStreak}
-            suffix="days"
-            iconColor="text-orange-400"
+          <StatBox
+            icon={Clock}
+            label="Active"
+            value={stats.activeWagers}
+            iconColor="text-amber-500"
           />
-          <StatBoxAnimated
-            label="Best Streak"
-            value={stats.longestStreak}
-            suffix="days"
-            iconColor="text-yellow-400"
+          <StatBox
+            icon={Target}
+            label="Failed"
+            value={stats.failedWagers}
+            iconColor="text-destructive"
           />
         </div>
 
-        {/* Active Wagers Progress */}
+        {/* Win/Loss Progress */}
         {stats.totalWagers > 0 && (
           <div className="space-y-2 pt-4 border-t border-border">
             <div className="flex justify-between text-sm">
@@ -109,10 +105,6 @@ export function StatsPanel({ stats, className }: StatsPanelProps) {
               value={(stats.completedWagers / stats.totalWagers) * 100}
               className="h-2"
             />
-            <div className="flex justify-between text-xs text-muted-foreground">
-              <span>{activeWagers} active</span>
-              <span>{stats.failedWagers} failed</span>
-            </div>
           </div>
         )}
       </CardContent>
@@ -147,27 +139,3 @@ function StatBox({
   );
 }
 
-function StatBoxAnimated({
-  label,
-  value,
-  suffix,
-  iconColor,
-}: {
-  label: string;
-  value: number;
-  suffix?: string;
-  iconColor: string;
-}) {
-  return (
-    <div className="border border-border bg-background p-3">
-      <div className="flex items-center gap-2 mb-2">
-        <FlameIcon size={16} className={iconColor} />
-        <span className="text-xs text-muted-foreground">{label}</span>
-      </div>
-      <p className="text-xl font-bold">
-        {value}
-        {suffix && <span className="text-sm font-normal text-muted-foreground ml-1">{suffix}</span>}
-      </p>
-    </div>
-  );
-}

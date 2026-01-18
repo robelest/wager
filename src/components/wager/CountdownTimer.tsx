@@ -111,7 +111,7 @@ function TimeUnit({
     <div className="flex flex-col items-center">
       <div
         className={cn(
-          "rounded-lg border border-border/50 bg-background/50 font-mono font-bold tabular-nums",
+          "rounded-sm border border-border/50 bg-background/50 font-mono font-bold tabular-nums",
           size === "lg"
             ? "text-4xl sm:text-5xl px-4 py-3 min-w-[80px] sm:min-w-[100px]"
             : "text-2xl sm:text-3xl px-3 py-2 min-w-[60px] sm:min-w-[72px]",

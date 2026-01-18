@@ -2,6 +2,19 @@ import { httpAction, mutation, query, internalMutation, internalAction, internal
 import { v } from "convex/values";
 import nacl from "tweetnacl";
 import { internal, api } from "./_generated/api";
+import { getWagerTask, getWagerDeadline } from "./validators";
+import {
+  createWagerEmbed,
+  createResultEmbed,
+  createProofEmbed,
+  createLeaderboardEmbed,
+  createMyWagersEmbed,
+  createBetConfirmationEmbed,
+} from "./discord/embeds";
+import {
+  createBettingButtons,
+  parseCustomId,
+} from "./discord/components";
 
 // ═══════════════════════════════════════════════════════════════
 // Discord Interaction Types
@@ -53,59 +66,39 @@ function hexToUint8Array(hex: string): Uint8Array {
   return bytes;
 }
 
-// ═══════════════════════════════════════════════════════════════
-// Embed Builders
-// ═══════════════════════════════════════════════════════════════
-function createWagerEmbed(
-  username: string,
-  avatarUrl: string | null,
-  task: string,
-  consequence: string,
-  deadline: number,
-  wagerId: string
-) {
-  return {
-    color: 0x5865f2, // Discord blurple
-    title: "PUBLIC WAGER",
-    author: {
-      name: username,
-      icon_url: avatarUrl || undefined,
-    },
-    fields: [
-      { name: "I commit to:", value: task, inline: false },
-      { name: "If I fail:", value: consequence, inline: false },
-      {
-        name: "Deadline",
-        value: `<t:${Math.floor(deadline / 1000)}:R>`,
-        inline: true,
-      },
-    ],
-    footer: { text: `Wager ID: ${wagerId}` },
-    timestamp: new Date().toISOString(),
-  };
+// Clean up error messages for user display
+function cleanErrorMessage(error: any): string {
+  let message = error?.message || error?.toString() || "Something went wrong";
+
+  // Strip common prefixes
+  message = message.replace(/^(Uncaught )?Error:\s*/i, "");
+
+  // Remove stack traces (anything after newline)
+  message = message.split("\n")[0];
+
+  // Trim whitespace
+  return message.trim();
 }
 
-function createResultEmbed(
-  username: string,
-  avatarUrl: string | null,
-  task: string,
-  passed: boolean,
-  reasoning: string
-) {
-  return {
-    color: passed ? 0x57f287 : 0xed4245, // Green or Red
-    title: passed ? "WAGER COMPLETED!" : "WAGER FAILED!",
-    author: {
-      name: username,
-      icon_url: avatarUrl || undefined,
-    },
-    description: passed ? "They actually did it!" : "Time for consequences...",
-    fields: [
-      { name: "Task", value: task, inline: false },
-      { name: "Verification", value: reasoning, inline: false },
-    ],
-    timestamp: new Date().toISOString(),
-  };
+// Fetch guild name from Discord API
+async function fetchGuildNameFromDiscord(guildId: string): Promise<string | null> {
+  const botToken = process.env.DISCORD_BOT_TOKEN;
+  if (!botToken) return null;
+
+  try {
+    const response = await fetch(`https://discord.com/api/v10/guilds/${guildId}`, {
+      headers: {
+        Authorization: `Bot ${botToken}`,
+      },
+    });
+
+    if (!response.ok) return null;
+
+    const guild = await response.json();
+    return guild.name || null;
+  } catch {
+    return null;
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -155,13 +148,28 @@ async function handleSlashCommand(ctx: any, interaction: any) {
   const { name, options } = interaction.data;
   const user = interaction.member?.user || interaction.user;
   const guildId = interaction.guild_id;
-  const guildName = interaction.guild?.name || "Unknown Server";
 
-  // Auto-register server if it doesn't exist (so users don't have to run /setup first)
+  // Discord HTTP interactions don't include guild.name, only guild_id
+  // We need to either get it from our DB or fetch it from Discord API
+  let guildName = interaction.guild?.name;
+
+  if (guildId && !guildName) {
+    // First check our database for existing server record
+    const existingServer = await ctx.runQuery(api.discord.getServerByGuildId, { guildId });
+
+    if (existingServer && existingServer.guildName !== "Unknown Server") {
+      guildName = existingServer.guildName;
+    } else {
+      // Fetch from Discord API if we don't have a real name
+      guildName = await fetchGuildNameFromDiscord(guildId);
+    }
+  }
+
+  // Auto-register server with the resolved name
   if (guildId) {
     await ctx.runMutation(api.discord.registerServer, {
       guildId,
-      guildName,
+      guildName: guildName || "Unknown Server",
     });
   }
 
@@ -181,6 +189,9 @@ async function handleSlashCommand(ctx: any, interaction: any) {
     case "setup":
       return await handleSetupCommand(ctx, interaction, guildId, options);
 
+    case "reward":
+      return await handleRewardCommand(ctx, interaction, user, guildId, options);
+
     default:
       return Response.json({
         type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
@@ -194,7 +205,7 @@ async function handleSlashCommand(ctx: any, interaction: any) {
 // ═══════════════════════════════════════════════════════════════
 async function handleWagerCommand(
   ctx: any,
-  interaction: any,
+  _interaction: any, // May be used in the future for modal responses
   user: any,
   guildId: string,
   options: any[]
@@ -226,39 +237,21 @@ async function handleWagerCommand(
     });
 
     const deadline = Date.now() + hours * 60 * 60 * 1000;
+    const avatarUrl = user.avatar
+      ? `https://cdn.discordapp.com/avatars/${user.id}/${user.avatar}.png`
+      : null;
+
     const embed = createWagerEmbed(
       user.global_name || user.username,
-      user.avatar
-        ? `https://cdn.discordapp.com/avatars/${user.id}/${user.avatar}.png`
-        : null,
+      avatarUrl,
       task,
       consequence,
       deadline,
       result.wagerId
     );
 
-    // Betting buttons
-    const components = [
-      {
-        type: 1, // ACTION_ROW
-        components: [
-          {
-            type: 2, // BUTTON
-            style: 3, // SUCCESS (green)
-            label: "They'll do it",
-            emoji: { name: "✅" },
-            custom_id: `bet_success_${result.wagerId}`,
-          },
-          {
-            type: 2, // BUTTON
-            style: 4, // DANGER (red)
-            label: "They'll fail",
-            emoji: { name: "❌" },
-            custom_id: `bet_fail_${result.wagerId}`,
-          },
-        ],
-      },
-    ];
+    // Enhanced betting buttons with amount selector
+    const components = createBettingButtons(result.wagerId);
 
     return Response.json({
       type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
@@ -333,26 +326,14 @@ async function handleMyWagersCommand(ctx: any, user: any) {
       discordId: user.id,
     });
 
-    if (wagers.length === 0) {
-      return Response.json({
-        type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
-        data: {
-          content: "You have no active wagers. Create one with `/wager`!",
-          flags: 64,
-        },
-      });
-    }
-
-    const embed = {
-      color: 0x5865f2,
-      title: "Your Active Wagers",
-      description: wagers
-        .map(
-          (w: any, i: number) =>
-            `**${i + 1}.** ${w.task}\n   *Deadline:* <t:${Math.floor(w.deadline / 1000)}:R>`
-        )
-        .join("\n\n"),
-    };
+    // Use the new embed helper
+    const embed = createMyWagersEmbed(
+      wagers.map((w: any) => ({
+        task: w.task,
+        deadline: w.deadline,
+        status: "active" as const,
+      }))
+    );
 
     return Response.json({
       type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
@@ -373,35 +354,11 @@ async function handleLeaderboardCommand(ctx: any, guildId: string) {
       guildId,
     });
 
-    const embed = {
-      color: 0xffd700, // Gold
-      title: "Server Leaderboard",
-      fields: [
-        {
-          name: "Most Reliable",
-          value:
-            leaderboard.mostReliable
-              ?.map(
-                (u: any, i: number) =>
-                  `${["🥇", "🥈", "🥉"][i] || `${i + 1}.`} <@${u.discordId}> - ${u.completedWagers}/${u.totalWagers}`
-              )
-              .join("\n") || "No data yet",
-          inline: false,
-        },
-        {
-          name: "Longest Streak",
-          value:
-            leaderboard.longestStreak
-              ?.map(
-                (u: any, i: number) =>
-                  `${["🥇", "🥈", "🥉"][i] || `${i + 1}.`} <@${u.discordId}> - ${u.longestStreak} wagers`
-              )
-              .join("\n") || "No data yet",
-          inline: false,
-        },
-      ],
-      timestamp: new Date().toISOString(),
-    };
+    // Use the new embed helper with website-matched amber color
+    const embed = createLeaderboardEmbed(
+      leaderboard.mostReliable || [],
+      leaderboard.topBettors // Optional second column
+    );
 
     return Response.json({
       type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
@@ -467,17 +424,143 @@ async function handleSetupCommand(
   }
 }
 
+async function handleRewardCommand(
+  ctx: any,
+  interaction: any,
+  issuer: any,
+  guildId: string,
+  options: any[]
+) {
+  // Check permissions (admin only)
+  const permissions = BigInt(interaction.member?.permissions || 0);
+  const ADMINISTRATOR = BigInt(1 << 3);
+
+  if ((permissions & ADMINISTRATOR) !== ADMINISTRATOR) {
+    return Response.json({
+      type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+      data: {
+        content: "Only administrators can issue rewards.",
+        flags: 64,
+      },
+    });
+  }
+
+  // Get command options
+  const targetUser = options?.find((o: any) => o.name === "user")?.value;
+  const amount = options?.find((o: any) => o.name === "amount")?.value;
+  const reason = options?.find((o: any) => o.name === "reason")?.value || "Admin reward";
+
+  if (!targetUser || amount === undefined) {
+    return Response.json({
+      type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+      data: { content: "Missing user or amount", flags: 64 },
+    });
+  }
+
+  // Get the target user details from resolved data
+  const resolvedUser = interaction.data.resolved?.users?.[targetUser];
+  if (!resolvedUser) {
+    return Response.json({
+      type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+      data: { content: "Could not resolve user", flags: 64 },
+    });
+  }
+
+  try {
+    const result = await ctx.runMutation(api.rewards.issueReward, {
+      guildId,
+      recipientDiscordId: resolvedUser.id,
+      recipientUsername: resolvedUser.username,
+      amount,
+      reason,
+      issuedByDiscordId: issuer.id,
+      issuedByUsername: issuer.username,
+    });
+
+    const symbol = amount > 0 ? "+" : "−";
+    const action = amount > 0 ? "awarded" : "deducted";
+    const absAmount = Math.abs(amount);
+
+    return Response.json({
+      type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+      data: {
+        content: `${symbol} **${absAmount} points** ${action} ${amount > 0 ? "to" : "from"} <@${resolvedUser.id}>\n▪ Reason: ${reason}\n● New balance: **${result.newPoints} points**`,
+      },
+    });
+  } catch (error: any) {
+    const errorMessage = cleanErrorMessage(error);
+    return Response.json({
+      type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+      data: {
+        content: `✗ ${errorMessage}`,
+        flags: 64,
+      },
+    });
+  }
+}
+
 // ═══════════════════════════════════════════════════════════════
-// Button Click Handler
+// Component Interaction Handler (Buttons & Select Menus)
 // ═══════════════════════════════════════════════════════════════
+
+// Store selected bet amounts temporarily (in-memory, per interaction)
+// In production, you might want to use a database or session storage
+const selectedBetAmounts = new Map<string, number>();
+
 async function handleButtonClick(ctx: any, interaction: any) {
   const customId = interaction.data.custom_id;
   const user = interaction.member?.user || interaction.user;
   const guildId = interaction.guild_id;
 
-  if (customId.startsWith("bet_")) {
-    const [, prediction, wagerId] = customId.split("_");
-    const DEFAULT_BET = 10;
+  // Handle bet amount select menu
+  if (customId.startsWith("bet_amount_")) {
+    const wagerId = customId.replace("bet_amount_", "");
+    const selectedValue = interaction.data.values?.[0];
+
+    if (selectedValue === "custom") {
+      // For custom amounts, just acknowledge - they need to use buttons
+      return Response.json({
+        type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+        data: {
+          content: "▸ To bet a custom amount, use the web app at wager.app",
+          flags: 64,
+        },
+      });
+    }
+
+    const amount = parseInt(selectedValue, 10);
+    if (!isNaN(amount)) {
+      // Store the selected amount for this user/wager combo
+      selectedBetAmounts.set(`${user.id}_${wagerId}`, amount);
+    }
+
+    return Response.json({
+      type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+      data: {
+        content: `● Bet amount set to **${amount} points**. Now click a prediction button!`,
+        flags: 64,
+      },
+    });
+  }
+
+  // Handle bet buttons
+  if (customId.startsWith("bet_success_") || customId.startsWith("bet_fail_")) {
+    const parsed = parseCustomId(customId);
+    const wagerId = parsed.wagerId;
+    const prediction = parsed.prediction;
+
+    if (!wagerId || !prediction) {
+      return Response.json({
+        type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+        data: { content: "Invalid bet action", flags: 64 },
+      });
+    }
+
+    // Get the selected bet amount, default to 10
+    const betKey = `${user.id}_${wagerId}`;
+    const betAmount = selectedBetAmounts.get(betKey) || 10;
+    // Clear the stored amount after use
+    selectedBetAmounts.delete(betKey);
 
     try {
       // Check if user can bet first
@@ -490,43 +573,41 @@ async function handleButtonClick(ctx: any, interaction: any) {
         return Response.json({
           type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
           data: {
-            content: `🚫 ${canBet.reason}`,
+            content: `✗ ${canBet.reason}`,
             flags: 64,
           },
         });
       }
 
-      // Get user's current points
-      const pointsInfo = await ctx.runQuery(api.bets.getUserServerPoints, {
-        discordId: user.id,
-        guildId,
-      });
-
-      // Place the bet with default 10 points
+      // Place the bet
       const result = await ctx.runMutation(api.bets.placeBet, {
         wagerId,
         oddsmakerDiscordId: user.id,
         oddsmakerUsername: user.username,
-        prediction: prediction as "success" | "fail",
-        pointsWagered: DEFAULT_BET,
+        prediction: prediction,
+        pointsWagered: betAmount,
       });
 
-      const emoji = prediction === "success" ? "✅" : "❌";
-      const predictionText = prediction === "success" ? "they'll succeed" : "they'll fail";
+      // Use the new styled embed for confirmation
+      const embed = createBetConfirmationEmbed(
+        prediction,
+        betAmount,
+        result.remainingPoints
+      );
 
       return Response.json({
         type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
         data: {
-          content: `${emoji} **Bet placed!** You wagered **${DEFAULT_BET} points** that ${predictionText}.\n💰 Remaining balance: **${result.remainingPoints} points**`,
+          embeds: [embed],
           flags: 64,
         },
       });
     } catch (error: any) {
-      const errorMessage = error?.message || "Failed to place bet.";
+      const errorMessage = cleanErrorMessage(error);
       return Response.json({
         type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
         data: {
-          content: `❌ ${errorMessage}`,
+          content: `✗ ${errorMessage}`,
           flags: 64,
         },
       });
@@ -535,7 +616,7 @@ async function handleButtonClick(ctx: any, interaction: any) {
 
   return Response.json({
     type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
-    data: { content: "Unknown action", flags: 64 },
+    data: { content: "✗ Unknown action", flags: 64 },
   });
 }
 
@@ -576,6 +657,17 @@ export const configureServer = mutation({
   },
 });
 
+// Query to get server by guildId (used for resolving guild names)
+export const getServerByGuildId = query({
+  args: { guildId: v.string() },
+  handler: async (ctx, args) => {
+    return await ctx.db
+      .query("discordServers")
+      .withIndex("by_guildId", (q) => q.eq("guildId", args.guildId))
+      .unique();
+  },
+});
+
 export const registerServer = mutation({
   args: {
     guildId: v.string(),
@@ -596,6 +688,43 @@ export const registerServer = mutation({
     } else if (args.guildName !== "Unknown Server" && existing.guildName === "Unknown Server") {
       // Update the name if we now have a real one
       await ctx.db.patch(existing._id, { guildName: args.guildName });
+    }
+  },
+});
+
+// ═══════════════════════════════════════════════════════════════
+// Gateway Bot Sync - Called by the discord.js Gateway bot
+// ═══════════════════════════════════════════════════════════════
+export const syncServer = mutation({
+  args: {
+    guildId: v.string(),
+    guildName: v.string(),
+    isActive: v.boolean(),
+  },
+  handler: async (ctx, args) => {
+    const existing = await ctx.db
+      .query("discordServers")
+      .withIndex("by_guildId", (q) => q.eq("guildId", args.guildId))
+      .unique();
+
+    if (existing) {
+      // Update existing server
+      await ctx.db.patch(existing._id, {
+        guildName: args.guildName,
+        isActive: args.isActive,
+        lastSyncedAt: Date.now(),
+      });
+      console.log(`Synced server ${args.guildName} (${args.guildId}): isActive=${args.isActive}`);
+    } else if (args.isActive) {
+      // Only insert if the bot is actually in the server
+      await ctx.db.insert("discordServers", {
+        guildId: args.guildId,
+        guildName: args.guildName,
+        isActive: true,
+        addedAt: Date.now(),
+        lastSyncedAt: Date.now(),
+      });
+      console.log(`Registered new server via sync: ${args.guildName} (${args.guildId})`);
     }
   },
 });
@@ -637,36 +766,18 @@ export const postWagerToDiscord = internalAction({
       return;
     }
 
-    // Create the embed
+    // Create the enhanced embed with website-matched colors
     const embed = createWagerEmbed(
       user.discordDisplayName || user.discordUsername,
       user.discordAvatarUrl || null,
-      wager.task,
+      getWagerTask(wager),
       wager.consequence,
-      wager.deadline,
+      getWagerDeadline(wager),
       args.wagerId
     );
 
-    // Create betting buttons
-    const components = [
-      {
-        type: 1, // ACTION_ROW
-        components: [
-          {
-            type: 2, // BUTTON
-            style: 3, // SUCCESS (green)
-            label: "🎯 They'll do it (10 pts)",
-            custom_id: `bet_success_${args.wagerId}`,
-          },
-          {
-            type: 2, // BUTTON
-            style: 4, // DANGER (red)
-            label: "💀 No way (10 pts)",
-            custom_id: `bet_fail_${args.wagerId}`,
-          },
-        ],
-      },
-    ];
+    // Create enhanced betting buttons with amount selector
+    const components = createBettingButtons(args.wagerId);
 
     // Post to Discord via REST API
     const botToken = process.env.DISCORD_BOT_TOKEN;
@@ -766,13 +877,16 @@ export const postResultToDiscord = internalAction({
       return;
     }
 
-    // Create result embed
+    // Create enhanced result embed with website-matched colors
     const embed = createResultEmbed(
       user.discordDisplayName || user.discordUsername,
       user.discordAvatarUrl || null,
-      wager.task,
+      getWagerTask(wager),
       args.passed,
-      wager.verificationResult?.reasoning || (args.passed ? "Task completed!" : "Deadline passed without valid proof.")
+      wager.verificationResult?.reasoning || (args.passed ? "Task completed!" : "Deadline passed without valid proof."),
+      wager.verificationResult?.confidence, // Pass confidence for progress bar
+      undefined, // totalPool - could be calculated if needed
+      wager.proofImageUrl // Show proof image for successful wagers
     );
 
     // Check if we have audio to attach
@@ -901,33 +1015,15 @@ export const postProofToDiscord = internalAction({
       return;
     }
 
-    // Create proof submission embed
-    const embed = {
-      color: 0xf1c40f, // Yellow
-      title: "📸 PROOF SUBMITTED",
-      author: {
-        name: user.discordDisplayName || user.discordUsername,
-        icon_url: user.discordAvatarUrl || undefined,
-      },
-      description: `Proof submitted for: **${wager.task}**`,
-      image: {
-        url: args.proofUrl,
-      },
-      fields: [
-        {
-          name: "Status",
-          value: "🔄 AI verification in progress...",
-          inline: true,
-        },
-        {
-          name: "Deadline",
-          value: `<t:${Math.floor(wager.deadline / 1000)}:R>`,
-          inline: true,
-        },
-      ],
-      footer: { text: `Wager ID: ${args.wagerId}` },
-      timestamp: new Date().toISOString(),
-    };
+    // Create proof submission embed with website-matched warning color
+    const embed = createProofEmbed(
+      user.discordDisplayName || user.discordUsername,
+      user.discordAvatarUrl || null,
+      getWagerTask(wager),
+      args.proofUrl,
+      getWagerDeadline(wager),
+      args.wagerId
+    );
 
     // Post to Discord via REST API
     const botToken = process.env.DISCORD_BOT_TOKEN;

@@ -3,7 +3,6 @@
 import { Avatar, AvatarFallback, AvatarImage } from "~/components/ui/avatar";
 import { Badge } from "~/components/ui/badge";
 import { cn } from "~/lib/utils";
-import { FlameIcon } from "~/components/ui/flame";
 import { Medal } from "lucide-react";
 
 interface LeaderboardUser {
@@ -11,7 +10,7 @@ interface LeaderboardUser {
   name: string;
   avatar: string | null;
   completedWagers: number;
-  currentStreak: number;
+  totalWagers: number;
   successRate: number;
   rank: number;
 }
@@ -111,16 +110,10 @@ export function Podium({ users, className }: PodiumProps) {
                 {user.name}
               </p>
 
-              {/* Streak */}
-              <div className="mt-2 flex items-center gap-1 text-sm text-muted-foreground">
-                <FlameIcon size={16} className="text-orange-400" />
-                <span>{user.currentStreak} streak</span>
-              </div>
-
               {/* Stats */}
               <div className="mt-3 flex gap-2">
                 <Badge variant="outline" className="text-xs bg-background border-border">
-                  {user.completedWagers} won
+                  {user.completedWagers}/{user.totalWagers}
                 </Badge>
                 <Badge
                   variant="outline"

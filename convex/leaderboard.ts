@@ -1,5 +1,15 @@
 import { query, internalMutation } from "./_generated/server";
 import { v } from "convex/values";
+import { getWagerTask } from "./validators";
+
+// Helper to compute user stats from their wagers
+function computeUserStats(wagers: Array<{ status: string }>) {
+  const totalWagers = wagers.length;
+  const completedWagers = wagers.filter((w) => w.status === "completed").length;
+  const failedWagers = wagers.filter((w) => w.status === "failed").length;
+
+  return { totalWagers, completedWagers, failedWagers };
+}
 
 // Get server leaderboard
 export const getServerLeaderboard = query({
@@ -7,24 +17,37 @@ export const getServerLeaderboard = query({
     guildId: v.string(),
   },
   handler: async (ctx, args) => {
-    // Get all users who have wagers in this server
+    // Get all wagers in this server
     const serverWagers = await ctx.db
       .query("wagers")
       .withIndex("by_guildId", (q) => q.eq("guildId", args.guildId))
       .collect();
 
-    // Get unique user IDs
+    // Group wagers by userId
+    const wagersByUser = new Map<string, typeof serverWagers>();
+    for (const wager of serverWagers) {
+      const userId = wager.userId.toString();
+      if (!wagersByUser.has(userId)) {
+        wagersByUser.set(userId, []);
+      }
+      wagersByUser.get(userId)!.push(wager);
+    }
+
+    // Get unique user IDs and fetch user data
     const userIds = [...new Set(serverWagers.map((w) => w.userId))];
+    const users = await Promise.all(userIds.map((id) => ctx.db.get(id)));
 
-    // Fetch user data
-    const users = await Promise.all(
-      userIds.map((id) => ctx.db.get(id))
-    );
-
-    const validUsers = users.filter((u) => u !== null);
+    // Compute stats for each user
+    const usersWithStats = users
+      .filter((u) => u !== null)
+      .map((u) => {
+        const userWagers = wagersByUser.get(u._id.toString()) || [];
+        const stats = computeUserStats(userWagers);
+        return { ...u, ...stats };
+      });
 
     // Sort by completion rate (completed / total)
-    const mostReliable = validUsers
+    const mostReliable = usersWithStats
       .filter((u) => u.totalWagers > 0)
       .sort((a, b) => {
         const rateA = a.completedWagers / a.totalWagers;
@@ -39,30 +62,8 @@ export const getServerLeaderboard = query({
         totalWagers: u.totalWagers,
       }));
 
-    // Sort by longest streak
-    const longestStreak = validUsers
-      .filter((u) => u.longestStreak > 0)
-      .sort((a, b) => b.longestStreak - a.longestStreak)
-      .slice(0, 5)
-      .map((u) => ({
-        discordId: u.discordId,
-        discordUsername: u.discordUsername,
-        longestStreak: u.longestStreak,
-      }));
-
-    // Sort by current streak
-    const currentStreak = validUsers
-      .filter((u) => u.currentStreak > 0)
-      .sort((a, b) => b.currentStreak - a.currentStreak)
-      .slice(0, 5)
-      .map((u) => ({
-        discordId: u.discordId,
-        discordUsername: u.discordUsername,
-        currentStreak: u.currentStreak,
-      }));
-
     // Most active (total wagers)
-    const mostActive = validUsers
+    const mostActive = usersWithStats
       .filter((u) => u.totalWagers > 0)
       .sort((a, b) => b.totalWagers - a.totalWagers)
       .slice(0, 5)
@@ -74,8 +75,6 @@ export const getServerLeaderboard = query({
 
     return {
       mostReliable,
-      longestStreak,
-      currentStreak,
       mostActive,
     };
   },
@@ -85,21 +84,35 @@ export const getServerLeaderboard = query({
 export const getGlobalLeaderboard = query({
   args: {},
   handler: async (ctx) => {
-    // Get all users sorted by completed wagers
-    const users = await ctx.db
-      .query("users")
-      .withIndex("by_completedWagers")
-      .order("desc")
-      .take(10);
+    // Get all wagers and group by user
+    const allWagers = await ctx.db.query("wagers").collect();
+    const wagersByUser = new Map<string, typeof allWagers>();
+    for (const wager of allWagers) {
+      const userId = wager.userId.toString();
+      if (!wagersByUser.has(userId)) wagersByUser.set(userId, []);
+      wagersByUser.get(userId)!.push(wager);
+    }
 
-    return users.map((u) => ({
+    // Get all users
+    const users = await ctx.db.query("users").collect();
+
+    // Compute stats and sort by completed wagers
+    const usersWithStats = users
+      .map((u) => {
+        const userWagers = wagersByUser.get(u._id.toString()) || [];
+        const stats = computeUserStats(userWagers);
+        return { ...u, ...stats };
+      })
+      .filter((u) => u.totalWagers > 0)
+      .sort((a, b) => b.completedWagers - a.completedWagers)
+      .slice(0, 10);
+
+    return usersWithStats.map((u) => ({
       discordId: u.discordId,
       discordUsername: u.discordUsername,
       discordAvatarUrl: u.discordAvatarUrl,
       completedWagers: u.completedWagers,
       totalWagers: u.totalWagers,
-      currentStreak: u.currentStreak,
-      longestStreak: u.longestStreak,
     }));
   },
 });
@@ -108,39 +121,41 @@ export const getGlobalLeaderboard = query({
 export const getFullLeaderboard = query({
   args: {},
   handler: async (ctx) => {
-    // Get all users with at least one wager
-    const allUsers = await ctx.db
-      .query("users")
-      .filter((q) => q.gt(q.field("totalWagers"), 0))
-      .collect();
+    // Get all wagers and group by user
+    const allWagers = await ctx.db.query("wagers").collect();
+    const wagersByUser = new Map<string, typeof allWagers>();
+    for (const wager of allWagers) {
+      const userId = wager.userId.toString();
+      if (!wagersByUser.has(userId)) wagersByUser.set(userId, []);
+      wagersByUser.get(userId)!.push(wager);
+    }
 
-    // Map to consistent format with calculated success rate
-    const usersWithStats = allUsers.map((u) => ({
-      id: u.discordId,
-      name: u.discordUsername,
-      avatar: u.discordAvatarUrl ?? null,
-      completedWagers: u.completedWagers,
-      totalWagers: u.totalWagers,
-      currentStreak: u.currentStreak,
-      longestStreak: u.longestStreak,
-      successRate: u.totalWagers > 0
-        ? Math.round((u.completedWagers / u.totalWagers) * 100)
-        : 0,
-    }));
+    // Get all users
+    const allUsers = await ctx.db.query("users").collect();
+
+    // Compute stats for each user
+    const usersWithStats = allUsers
+      .map((u) => {
+        const userWagers = wagersByUser.get(u._id.toString()) || [];
+        const stats = computeUserStats(userWagers);
+        return {
+          id: u.discordId,
+          name: u.discordUsername,
+          avatar: u.discordAvatarUrl ?? null,
+          ...stats,
+          successRate: stats.totalWagers > 0
+            ? Math.round((stats.completedWagers / stats.totalWagers) * 100)
+            : 0,
+        };
+      })
+      .filter((u) => u.totalWagers > 0);
 
     // Most reliable (by success rate)
     const mostReliable = [...usersWithStats]
       .sort((a, b) => {
-        // Sort by success rate, then by completed wagers as tiebreaker
         if (b.successRate !== a.successRate) return b.successRate - a.successRate;
         return b.completedWagers - a.completedWagers;
       })
-      .slice(0, 20)
-      .map((u, i) => ({ ...u, rank: i + 1 }));
-
-    // Longest current streak
-    const byStreak = [...usersWithStats]
-      .sort((a, b) => b.currentStreak - a.currentStreak)
       .slice(0, 20)
       .map((u, i) => ({ ...u, rank: i + 1 }));
 
@@ -150,32 +165,29 @@ export const getFullLeaderboard = query({
       .slice(0, 20)
       .map((u, i) => ({ ...u, rank: i + 1 }));
 
-    // Hall of shame (low success rate or broken streak)
+    // Hall of shame (low success rate)
     const hallOfShame = [...usersWithStats]
-      .filter((u) => u.successRate < 75 || (u.currentStreak === 0 && u.totalWagers >= 3))
+      .filter((u) => u.successRate < 75 && u.totalWagers >= 3)
       .sort((a, b) => a.successRate - b.successRate)
       .slice(0, 20)
       .map((u, i) => ({ ...u, rank: i + 1 }));
 
     // Global stats
-    const totalUsers = allUsers.length;
-    const totalWagers = allUsers.reduce((sum, u) => sum + u.totalWagers, 0);
-    const totalCompleted = allUsers.reduce((sum, u) => sum + u.completedWagers, 0);
-    const activeStreaks = allUsers.filter((u) => u.currentStreak > 0).length;
+    const totalUsers = usersWithStats.length;
+    const totalWagers = usersWithStats.reduce((sum, u) => sum + u.totalWagers, 0);
+    const totalCompleted = usersWithStats.reduce((sum, u) => sum + u.completedWagers, 0);
     const avgSuccessRate = totalWagers > 0
       ? Math.round((totalCompleted / totalWagers) * 100)
       : 0;
 
     return {
       mostReliable,
-      byStreak,
       mostActive,
       hallOfShame,
       stats: {
         totalUsers,
         totalWagers,
         avgSuccessRate,
-        activeStreaks,
       },
     };
   },
@@ -318,7 +330,7 @@ export const generateWeeklySnapshot = internalMutation({
           ? {
               userId: walkOfShame.userId,
               wagerId: walkOfShame._id,
-              task: walkOfShame.task,
+              task: getWagerTask(walkOfShame),
             }
           : undefined,
         createdAt: Date.now(),

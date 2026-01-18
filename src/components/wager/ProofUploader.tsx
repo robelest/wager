@@ -12,6 +12,7 @@ interface ProofUploaderProps {
   onUpload: (file: File) => Promise<void>;
   isUploading?: boolean;
   currentProofUrl?: string;
+  verificationFailed?: boolean;
   className?: string;
 }
 
@@ -19,9 +20,13 @@ export function ProofUploader({
   onUpload,
   isUploading = false,
   currentProofUrl,
+  verificationFailed = false,
   className,
 }: ProofUploaderProps) {
-  const [preview, setPreview] = useState<string | null>(currentProofUrl || null);
+  const [preview, setPreview] = useState<string | null>(
+    verificationFailed ? null : (currentProofUrl || null)
+  );
+  const [isRetrying, setIsRetrying] = useState(verificationFailed);
   const [dragActive, setDragActive] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
 
@@ -87,13 +92,13 @@ export function ProofUploader({
         {preview ? (
           <div className="space-y-4">
             {/* Preview */}
-            <div className="relative rounded-lg overflow-hidden border border-border/50">
+            <div className="relative rounded-sm overflow-hidden border border-border/50">
               <img
                 src={preview}
                 alt="Proof preview"
                 className="w-full h-auto max-h-[400px] object-contain bg-background"
               />
-              {!currentProofUrl && (
+              {(!currentProofUrl || isRetrying) && (
                 <Button
                   variant="destructive"
                   size="icon"
@@ -107,7 +112,7 @@ export function ProofUploader({
             </div>
 
             {/* Actions */}
-            {!currentProofUrl && selectedFile && (
+            {(!currentProofUrl || isRetrying) && selectedFile && (
               <div className="flex gap-2">
                 <Button
                   variant="outline"
@@ -134,17 +139,39 @@ export function ProofUploader({
               </div>
             )}
 
-            {currentProofUrl && (
-              <div className="flex items-center gap-2 text-success text-sm">
-                <CircleCheckIcon size={16} />
-                <span>Proof submitted - awaiting verification</span>
+            {currentProofUrl && !isRetrying && (
+              <div className="space-y-3">
+                {verificationFailed ? (
+                  <>
+                    <div className="flex items-center gap-2 text-destructive text-sm">
+                      <X className="size-4" />
+                      <span>Verification failed - you can submit new proof</span>
+                    </div>
+                    <Button
+                      variant="outline"
+                      onClick={() => {
+                        setIsRetrying(true);
+                        setPreview(null);
+                        setSelectedFile(null);
+                      }}
+                      className="w-full"
+                    >
+                      Submit New Proof
+                    </Button>
+                  </>
+                ) : (
+                  <div className="flex items-center gap-2 text-success text-sm">
+                    <CircleCheckIcon size={16} />
+                    <span>Proof submitted - awaiting verification</span>
+                  </div>
+                )}
               </div>
             )}
           </div>
         ) : (
           <div
             className={cn(
-              "relative flex flex-col items-center justify-center rounded-lg border-2 border-dashed p-8 transition-all",
+              "relative flex flex-col items-center justify-center rounded-sm border-2 border-dashed p-8 transition-all",
               dragActive
                 ? "border-primary bg-primary/5"
                 : "border-border/50 hover:border-primary/50 hover:bg-primary/5"
@@ -175,17 +202,6 @@ export function ProofUploader({
           </div>
         )}
 
-        {/* Tips */}
-        <div className="mt-4 rounded-lg border border-primary/20 bg-primary/5 p-4">
-          <p className="text-sm">
-            <span className="font-semibold text-primary">Tips for good proof:</span>
-          </p>
-          <ul className="text-sm text-muted-foreground mt-2 space-y-1 list-disc list-inside">
-            <li>Make sure the image clearly shows task completion</li>
-            <li>Include timestamps or dates when relevant</li>
-            <li>Avoid blurry or cropped images</li>
-          </ul>
-        </div>
       </CardContent>
     </Card>
   );

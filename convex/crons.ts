@@ -24,4 +24,15 @@ crons.weekly(
   internal.leaderboard.generateWeeklySnapshot
 );
 
+// ═══════════════════════════════════════════════════════════════
+// STORAGE CLEANUP - Daily at 03:00 UTC
+// Remove orphaned files not linked to any wager
+// (Files older than 1 hour that aren't referenced anywhere)
+// ═══════════════════════════════════════════════════════════════
+crons.daily(
+  "cleanup orphaned storage files",
+  { hourUTC: 3, minuteUTC: 0 },
+  internal.wagers.cleanupOrphanedFiles
+);
+
 export default crons;

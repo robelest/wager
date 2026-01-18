@@ -2,7 +2,6 @@
 
 import { Avatar, AvatarFallback, AvatarImage } from "~/components/ui/avatar";
 import { cn } from "~/lib/utils";
-import { FlameIcon } from "~/components/ui/flame";
 
 interface User {
   id: string;
@@ -15,8 +14,7 @@ interface UserStats {
   totalWagers: number;
   completedWagers: number;
   failedWagers: number;
-  currentStreak: number;
-  longestStreak: number;
+  activeWagers: number;
 }
 
 interface DashboardHeaderProps {
@@ -50,20 +48,11 @@ export function DashboardHeader({ user, stats, className }: DashboardHeaderProps
         </Avatar>
         <div>
           <h1 className="text-xl font-semibold">{user.name?.split(" ")[0] || "User"}</h1>
-          <div className="flex items-center gap-2 mt-1 text-sm text-muted-foreground">
-            {stats.currentStreak > 0 && (
-              <span className="flex items-center gap-1">
-                <FlameIcon size={14} className="text-orange-500" />
-                {stats.currentStreak} day streak
-              </span>
-            )}
-            {stats.currentStreak > 0 && successRate >= 80 && stats.totalWagers >= 5 && (
-              <span>·</span>
-            )}
-            {successRate >= 80 && stats.totalWagers >= 5 && (
-              <span>{successRate}% success rate</span>
-            )}
-          </div>
+          {successRate >= 80 && stats.totalWagers >= 5 && (
+            <p className="text-sm text-muted-foreground mt-1">
+              {successRate}% success rate
+            </p>
+          )}
         </div>
       </div>
 

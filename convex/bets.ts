@@ -5,6 +5,7 @@ import {
   internalQuery,
 } from "./_generated/server";
 import { v } from "convex/values";
+import { internal } from "./_generated/api";
 import type { Id, Doc } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 
@@ -196,6 +197,7 @@ export const placeBet = mutation({
 });
 
 // Settle all bets for a completed wager (internal)
+// Includes creator cut: when wager passes, creator gets 25% of fail pool
 export const settleBets = internalMutation({
   args: {
     wagerId: v.id("wagers"),
@@ -203,7 +205,7 @@ export const settleBets = internalMutation({
   },
   handler: async (ctx, args) => {
     const wager = await ctx.db.get(args.wagerId);
-    if (!wager || !wager.guildId) return;
+    if (!wager || !wager.guildId) return { creatorCut: 0 };
 
     // Get all unsettled bets for this wager
     const bets = await ctx.db
@@ -212,11 +214,42 @@ export const settleBets = internalMutation({
       .filter((q) => q.eq(q.field("settled"), false))
       .collect();
 
-    if (bets.length === 0) return;
+    if (bets.length === 0) return { creatorCut: 0 };
 
     // Calculate pools
     const winningPrediction = args.passed ? "success" : "fail";
-    const totalPool = bets.reduce((sum, bet) => sum + bet.pointsWagered, 0);
+    const successBets = bets.filter((b) => b.prediction === "success");
+    const failBets = bets.filter((b) => b.prediction === "fail");
+    const successPool = successBets.reduce((sum, b) => sum + b.pointsWagered, 0);
+    const failPool = failBets.reduce((sum, b) => sum + b.pointsWagered, 0);
+    const totalPool = successPool + failPool;
+
+    // Calculate creator cut: 25% of the losing pool when wager passes
+    // This rewards creators for completing challenging wagers that people bet against
+    let creatorCut = 0;
+    let poolForWinners = totalPool;
+
+    if (args.passed && failPool > 0) {
+      // Creator gets 25% of fail pool when they succeed
+      creatorCut = Math.floor(failPool * 0.25);
+      poolForWinners = totalPool - creatorCut;
+
+      // Credit creator's server stats
+      const creatorStats = await ctx.db
+        .query("userServerStats")
+        .withIndex("by_userId_guildId", (q) =>
+          q.eq("userId", wager.userId).eq("guildId", wager.guildId!)
+        )
+        .unique();
+
+      if (creatorStats) {
+        await ctx.db.patch(creatorStats._id, {
+          points: creatorStats.points + creatorCut,
+          totalPointsWon: creatorStats.totalPointsWon + creatorCut,
+        });
+      }
+    }
+
     const winningBets = bets.filter((b) => b.prediction === winningPrediction);
     const winningPool = winningBets.reduce(
       (sum, bet) => sum + bet.pointsWagered,
@@ -229,8 +262,8 @@ export const settleBets = internalMutation({
       let payout = 0;
 
       if (isWinner && winningPool > 0) {
-        // Winners split the total pool proportionally
-        payout = Math.floor((bet.pointsWagered / winningPool) * totalPool);
+        // Winners split the pool (minus creator cut) proportionally
+        payout = Math.floor((bet.pointsWagered / winningPool) * poolForWinners);
       }
 
       // Update bet record
@@ -264,13 +297,125 @@ export const settleBets = internalMutation({
         const profit = payout - bet.pointsWagered;
         await ctx.db.patch(stats._id, {
           points: stats.points + payout,
-          totalPointsWon: stats.totalPointsWon + profit,
+          totalPointsWon: stats.totalPointsWon + (profit > 0 ? profit : 0),
           correctBets: stats.correctBets + 1,
         });
       } else {
         await ctx.db.patch(stats._id, {
           totalPointsLost: stats.totalPointsLost + bet.pointsWagered,
         });
+      }
+    }
+
+    // Settle any parlay legs that include this wager
+    const parlayLegs = await ctx.db
+      .query("parlayLegs")
+      .withIndex("by_wagerId", (q) => q.eq("wagerId", args.wagerId))
+      .filter((q) => q.eq(q.field("status"), "pending"))
+      .collect();
+
+    for (const leg of parlayLegs) {
+      const isCorrect =
+        (leg.prediction === "success" && args.passed) ||
+        (leg.prediction === "fail" && !args.passed);
+
+      await ctx.db.patch(leg._id, {
+        status: isCorrect ? "correct" : "incorrect",
+      });
+
+      // Check if the parlay can now be settled
+      await ctx.scheduler.runAfter(0, internal.bets.checkAndSettleParlay, {
+        parlayId: leg.parlayId,
+      });
+    }
+
+    return { creatorCut };
+  },
+});
+
+// Check if a parlay can be settled and settle it
+export const checkAndSettleParlay = internalMutation({
+  args: {
+    parlayId: v.id("parlayBets"),
+  },
+  handler: async (ctx, args) => {
+    const parlay = await ctx.db.get(args.parlayId);
+    if (!parlay || parlay.settled) return;
+
+    // Get all legs
+    const legs = await ctx.db
+      .query("parlayLegs")
+      .withIndex("by_parlayId", (q) => q.eq("parlayId", args.parlayId))
+      .collect();
+
+    // Check if all legs are resolved
+    const pendingLegs = legs.filter((l) => l.status === "pending");
+    if (pendingLegs.length > 0) return; // Still waiting for outcomes
+
+    // Determine outcome
+    const incorrectLegs = legs.filter((l) => l.status === "incorrect");
+    const cancelledLegs = legs.filter((l) => l.status === "cancelled");
+
+    let status: "won" | "lost" | "cancelled" | "void";
+    let payout = 0;
+
+    if (cancelledLegs.length === legs.length) {
+      // All legs cancelled - full refund
+      status = "void";
+      payout = parlay.pointsWagered;
+    } else if (cancelledLegs.length > 0) {
+      // Some legs cancelled
+      if (incorrectLegs.length > 0) {
+        // Lost due to incorrect prediction
+        status = "lost";
+        payout = 0;
+      } else {
+        // Would have won, but partial cancellation - reduced payout
+        status = "cancelled";
+        const remainingLegs = legs.length - cancelledLegs.length;
+        payout = Math.floor(parlay.pointsWagered * Math.pow(1.5, remainingLegs));
+      }
+    } else if (incorrectLegs.length > 0) {
+      status = "lost";
+      payout = 0;
+    } else {
+      status = "won";
+      payout = parlay.potentialPayout;
+    }
+
+    // Update parlay
+    await ctx.db.patch(args.parlayId, {
+      status,
+      actualPayout: payout,
+      settled: true,
+      settledAt: Date.now(),
+    });
+
+    // Credit winner's points
+    if (payout > 0) {
+      const bettor = await ctx.db
+        .query("users")
+        .withIndex("by_discordId", (q) =>
+          q.eq("discordId", parlay.oddsmakerDiscordId)
+        )
+        .unique();
+
+      if (bettor) {
+        const stats = await ctx.db
+          .query("userServerStats")
+          .withIndex("by_userId_guildId", (q) =>
+            q.eq("userId", bettor._id).eq("guildId", parlay.guildId)
+          )
+          .unique();
+
+        if (stats) {
+          const profit = payout - parlay.pointsWagered;
+          await ctx.db.patch(stats._id, {
+            points: stats.points + payout,
+            totalPointsWon: stats.totalPointsWon + (profit > 0 ? profit : 0),
+            correctBets: status === "won" ? stats.correctBets + 1 : stats.correctBets,
+          });
+        }
       }
     }
   },
@@ -476,6 +621,123 @@ export const canUserBet = query({
     }
 
     return { canBet: true };
+  },
+});
+
+// Get current user's bets (for My Bets tab)
+export const getMyBets = query({
+  args: {},
+  handler: async (ctx) => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) return [];
+
+    // Find user by Better Auth ID first, then get Discord ID
+    const user = await ctx.db
+      .query("users")
+      .withIndex("by_betterAuthUserId", (q) =>
+        q.eq("betterAuthUserId", identity.subject)
+      )
+      .unique();
+
+    if (!user || !user.discordId) return [];
+
+    // Get all bets by this user
+    const bets = await ctx.db
+      .query("bets")
+      .filter((q) => q.eq(q.field("oddsmakerDiscordId"), user.discordId))
+      .collect();
+
+    // Enrich with wager details
+    const enrichedBets = await Promise.all(
+      bets.map(async (bet) => {
+        const wager = await ctx.db.get(bet.wagerId);
+        if (!wager) return null;
+
+        const wagerOwner = await ctx.db.get(wager.userId);
+        const server = wager.guildId
+          ? await ctx.db
+              .query("discordServers")
+              .withIndex("by_guildId", (q) => q.eq("guildId", wager.guildId!))
+              .unique()
+          : null;
+
+        return {
+          ...bet,
+          wager: {
+            _id: wager._id,
+            task: wager.task,
+            consequence: wager.consequence,
+            status: wager.status,
+            deadline: wager.deadline,
+            user: wagerOwner
+              ? {
+                  name: wagerOwner.discordDisplayName || wagerOwner.discordUsername,
+                  avatar: wagerOwner.discordAvatarUrl,
+                }
+              : null,
+            server: server
+              ? {
+                  guildId: server.guildId,
+                  guildName: server.guildName,
+                }
+              : null,
+          },
+          // Calculate profit/loss if settled
+          profit: bet.settled
+            ? bet.payout
+              ? bet.payout - bet.pointsWagered
+              : -bet.pointsWagered
+            : null,
+        };
+      })
+    );
+
+    // Filter out nulls and sort by creation date
+    return enrichedBets
+      .filter((b): b is NonNullable<typeof b> => b !== null)
+      .sort((a, b) => b.createdAt - a.createdAt);
+  },
+});
+
+// Get user's total points across all servers (for header display)
+export const getMyTotalPoints = query({
+  args: {},
+  handler: async (ctx) => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) return { total: 0, servers: [] };
+
+    const user = await ctx.db
+      .query("users")
+      .withIndex("by_betterAuthUserId", (q) =>
+        q.eq("betterAuthUserId", identity.subject)
+      )
+      .unique();
+
+    if (!user) return { total: 0, servers: [] };
+
+    const stats = await ctx.db
+      .query("userServerStats")
+      .withIndex("by_userId", (q) => q.eq("userId", user._id))
+      .collect();
+
+    // Get server names
+    const serversWithPoints = await Promise.all(
+      stats.map(async (s) => {
+        const server = await ctx.db
+          .query("discordServers")
+          .withIndex("by_guildId", (q) => q.eq("guildId", s.guildId))
+          .unique();
+        return {
+          guildId: s.guildId,
+          guildName: server?.guildName || "Unknown",
+          points: s.points,
+        };
+      })
+    );
+
+    const total = stats.reduce((sum, s) => sum + s.points, 0);
+
+    return { total, servers: serversWithPoints };
   },
 });
 

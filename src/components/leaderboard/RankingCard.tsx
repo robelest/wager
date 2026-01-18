@@ -1,10 +1,8 @@
 "use client";
 
 import { Avatar, AvatarFallback, AvatarImage } from "~/components/ui/avatar";
-import { Badge } from "~/components/ui/badge";
 import { Progress } from "~/components/ui/progress";
 import { cn } from "~/lib/utils";
-import { FlameIcon } from "~/components/ui/flame";
 import { Trophy } from "lucide-react";
 
 interface LeaderboardUser {
@@ -13,8 +11,7 @@ interface LeaderboardUser {
   avatar: string | null;
   completedWagers: number;
   totalWagers: number;
-  currentStreak: number;
-  longestStreak: number;
+  failedWagers: number;
   successRate: number;
   rank: number;
 }
@@ -71,18 +68,7 @@ export function RankingCard({
 
       {/* Info */}
       <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2">
-          <p className="font-medium truncate">{user.name}</p>
-          {user.currentStreak >= 7 && (
-            <Badge
-              variant="outline"
-              className="bg-orange-100 text-orange-600 border-orange-300"
-            >
-              <FlameIcon size={12} className="mr-1" />
-              {user.currentStreak}
-            </Badge>
-          )}
-        </div>
+        <p className="font-medium truncate">{user.name}</p>
         {showDetails ? (
           <div className="mt-2 space-y-2">
             <div className="flex items-center justify-between text-sm">
@@ -109,8 +95,8 @@ export function RankingCard({
           <p className="text-xs text-muted-foreground">Rate</p>
         </div>
         <div>
-          <p className="text-lg font-bold text-orange-400">{user.currentStreak}</p>
-          <p className="text-xs text-muted-foreground">Streak</p>
+          <p className="text-lg font-bold">{user.totalWagers}</p>
+          <p className="text-xs text-muted-foreground">Total</p>
         </div>
       </div>
     </div>

@@ -3,14 +3,12 @@
 import { useQuery } from "convex/react";
 import { api } from "../../../convex/_generated/api";
 import { Card, CardContent, CardHeader, CardTitle } from "~/components/ui/card";
-import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "~/components/ui/avatar";
 import { Skeleton } from "~/components/ui/skeleton";
 import { cn } from "~/lib/utils";
 import { Link } from "@tanstack/react-router";
 import { ArrowRightIcon } from "~/components/ui/arrow-right";
-import { FlameIcon } from "~/components/ui/flame";
 import { Trophy } from "lucide-react";
 
 interface LeaderboardPreviewProps {
@@ -23,7 +21,6 @@ interface LeaderboardUser {
   avatar: string | null;
   completedWagers: number;
   totalWagers: number;
-  currentStreak: number;
   successRate: number;
   rank: number;
 }
@@ -57,7 +54,6 @@ export function LeaderboardPreview({ className }: LeaderboardPreviewProps) {
         avatar: user.discordAvatarUrl ?? null,
         completedWagers: user.completedWagers,
         totalWagers: user.totalWagers,
-        currentStreak: user.currentStreak,
         successRate: user.totalWagers > 0
           ? Math.round((user.completedWagers / user.totalWagers) * 100)
           : 0,
@@ -170,18 +166,7 @@ function RankingRow({ user }: { user: LeaderboardUser }) {
 
       {/* Info */}
       <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2">
-          <p className="font-medium truncate">{user.name}</p>
-          {user.currentStreak >= 7 && (
-            <Badge
-              variant="outline"
-              className="bg-orange-100 text-orange-600 border-orange-300"
-            >
-              <FlameIcon size={12} className="mr-1" />
-              {user.currentStreak}
-            </Badge>
-          )}
-        </div>
+        <p className="font-medium truncate">{user.name}</p>
         <p className="text-sm text-muted-foreground">
           {user.completedWagers} completed · {user.successRate}% success
         </p>
@@ -198,8 +183,8 @@ function RankingRow({ user }: { user: LeaderboardUser }) {
           <p className="text-xs text-muted-foreground">Rate</p>
         </div>
         <div>
-          <p className="text-lg font-bold text-orange-500">{user.currentStreak}</p>
-          <p className="text-xs text-muted-foreground">Streak</p>
+          <p className="text-lg font-bold">{user.totalWagers}</p>
+          <p className="text-xs text-muted-foreground">Total</p>
         </div>
       </div>
     </div>

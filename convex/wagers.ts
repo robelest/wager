@@ -9,6 +9,7 @@ import {
 import { v } from "convex/values";
 import { internal, api, components } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
+import { getWagerTask } from "./validators";
 
 // ═══════════════════════════════════════════════════════════════
 // Public Mutations (called from Discord bot)
@@ -40,11 +41,6 @@ export const createWagerFromDiscord = mutation({
         discordUsername: args.discordUsername,
         discordDisplayName: args.discordDisplayName,
         discordAvatarUrl: args.discordAvatarUrl,
-        totalWagers: 0,
-        completedWagers: 0,
-        failedWagers: 0,
-        currentStreak: 0,
-        longestStreak: 0,
       });
       user = await ctx.db.get(userId);
     }
@@ -62,11 +58,6 @@ export const createWagerFromDiscord = mutation({
       deadline,
       status: "active",
       createdAt: Date.now(),
-    });
-
-    // Update user stats
-    await ctx.db.patch(user._id, {
-      totalWagers: user.totalWagers + 1,
     });
 
     // Create or update user server stats (for points system)
@@ -177,6 +168,64 @@ export const getMyProfile = query({
   },
 });
 
+// Compute user stats from wagers (replaces denormalized fields)
+export const getUserStats = query({
+  args: { userId: v.id("users") },
+  handler: async (ctx, args) => {
+    const wagers = await ctx.db
+      .query("wagers")
+      .withIndex("by_userId", (q) => q.eq("userId", args.userId))
+      .collect();
+
+    const totalWagers = wagers.length;
+    const completedWagers = wagers.filter((w) => w.status === "completed").length;
+    const failedWagers = wagers.filter((w) => w.status === "failed").length;
+    const activeWagers = wagers.filter((w) => w.status === "active").length;
+
+    return {
+      totalWagers,
+      completedWagers,
+      failedWagers,
+      activeWagers,
+    };
+  },
+});
+
+// Get stats for current user
+export const getMyStats = query({
+  args: {},
+  handler: async (ctx) => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) return null;
+
+    const user = await ctx.db
+      .query("users")
+      .withIndex("by_betterAuthUserId", (q) =>
+        q.eq("betterAuthUserId", identity.subject)
+      )
+      .unique();
+
+    if (!user) return null;
+
+    const wagers = await ctx.db
+      .query("wagers")
+      .withIndex("by_userId", (q) => q.eq("userId", user._id))
+      .collect();
+
+    const totalWagers = wagers.length;
+    const completedWagers = wagers.filter((w) => w.status === "completed").length;
+    const failedWagers = wagers.filter((w) => w.status === "failed").length;
+    const activeWagers = wagers.filter((w) => w.status === "active").length;
+
+    return {
+      totalWagers,
+      completedWagers,
+      failedWagers,
+      activeWagers,
+    };
+  },
+});
+
 // Get current user's wagers
 export const getMyWagers = query({
   args: {
@@ -218,6 +267,95 @@ export const getMyWagers = query({
       .withIndex("by_userId", (q) => q.eq("userId", user._id))
       .order("desc")
       .collect();
+  },
+});
+
+// Get wagers from servers user is in (for Server Feed tab)
+export const getServerWagers = query({
+  args: {
+    status: v.optional(v.literal("active")),
+  },
+  handler: async (ctx, args) => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) return [];
+
+    // Find user
+    const user = await ctx.db
+      .query("users")
+      .withIndex("by_betterAuthUserId", (q) =>
+        q.eq("betterAuthUserId", identity.subject)
+      )
+      .unique();
+
+    if (!user) return [];
+
+    // Get all servers user is in (via userServerStats)
+    const userStats = await ctx.db
+      .query("userServerStats")
+      .withIndex("by_userId", (q) => q.eq("userId", user._id))
+      .collect();
+
+    const guildIds = userStats.map((s) => s.guildId);
+    if (guildIds.length === 0) return [];
+
+    // Get all active wagers from these servers (excluding user's own)
+    const allWagers = await ctx.db
+      .query("wagers")
+      .withIndex("by_status", (q) => q.eq("status", "active"))
+      .collect();
+
+    // Filter to servers user is in and exclude own wagers
+    const serverWagers = allWagers.filter(
+      (w) => w.guildId && guildIds.includes(w.guildId) && w.userId !== user._id
+    );
+
+    // Enrich with user info and bet stats
+    const enrichedWagers = await Promise.all(
+      serverWagers.map(async (wager) => {
+        const owner = await ctx.db.get(wager.userId);
+        const server = wager.guildId
+          ? await ctx.db
+              .query("discordServers")
+              .withIndex("by_guildId", (q) => q.eq("guildId", wager.guildId!))
+              .unique()
+          : null;
+
+        // Get bet stats
+        const bets = await ctx.db
+          .query("bets")
+          .withIndex("by_wagerId", (q) => q.eq("wagerId", wager._id))
+          .collect();
+
+        const successBets = bets.filter((b) => b.prediction === "success");
+        const failBets = bets.filter((b) => b.prediction === "fail");
+
+        return {
+          ...wager,
+          user: owner
+            ? {
+                name: owner.discordDisplayName || owner.discordUsername,
+                avatar: owner.discordAvatarUrl,
+              }
+            : null,
+          server: server
+            ? {
+                guildId: server.guildId,
+                guildName: server.guildName,
+              }
+            : null,
+          betStats: {
+            total: bets.length,
+            successCount: successBets.length,
+            failCount: failBets.length,
+            successPool: successBets.reduce((sum, b) => sum + b.pointsWagered, 0),
+            failPool: failBets.reduce((sum, b) => sum + b.pointsWagered, 0),
+          },
+        };
+      })
+    );
+
+    // Sort by creation date descending
+    return enrichedWagers.sort((a, b) => b.createdAt - a.createdAt);
   },
 });
 
@@ -352,11 +490,6 @@ export const createWagerInternal = internalMutation({
       createdAt: Date.now(),
     });
 
-    // Update user stats
-    await ctx.db.patch(user._id, {
-      totalWagers: user.totalWagers + 1,
-    });
-
     // Create or update user server stats (for points system)
     const existingStats = await ctx.db
       .query("userServerStats")
@@ -426,6 +559,163 @@ export const createWagerFromWeb = action({
     });
 
     return { wagerId: result.wagerId, oddsmakerDiscordId: result.oddsmakerDiscordId };
+  },
+});
+
+// Create a multi-task wager from web app
+export const createMultiTaskWagerFromWeb = action({
+  args: {
+    guildId: v.string(),
+    title: v.string(), // "Read 5 books"
+    consequence: v.string(),
+    tasks: v.array(
+      v.object({
+        description: v.string(),
+        deadlineHours: v.number(),
+      })
+    ),
+  },
+  handler: async (ctx, args): Promise<{ wagerId: Id<"wagers"> }> => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) {
+      throw new Error("Not authenticated");
+    }
+
+    if (args.tasks.length < 2) {
+      throw new Error("Multi-task wagers must have at least 2 tasks");
+    }
+
+    if (args.tasks.length > 10) {
+      throw new Error("Multi-task wagers can have at most 10 tasks");
+    }
+
+    // Get Discord ID from Better Auth account table
+    const account = await ctx.runQuery(components.betterAuth.adapter.findOne, {
+      model: "account",
+      where: [
+        { field: "providerId", operator: "eq", value: "discord" },
+        { field: "userId", operator: "eq", value: identity.subject },
+      ],
+    });
+
+    if (!account?.accountId) {
+      throw new Error("Discord account not found. Please sign in with Discord.");
+    }
+
+    // Create the multi-task wager via internal mutation
+    const result = await ctx.runMutation(internal.wagers.createMultiTaskWagerInternal, {
+      discordId: account.accountId as string,
+      betterAuthUserId: identity.subject,
+      guildId: args.guildId,
+      title: args.title,
+      consequence: args.consequence,
+      tasks: args.tasks,
+    });
+
+    return { wagerId: result.wagerId };
+  },
+});
+
+// Internal mutation to create multi-task wager
+export const createMultiTaskWagerInternal = internalMutation({
+  args: {
+    discordId: v.string(),
+    betterAuthUserId: v.string(),
+    guildId: v.string(),
+    title: v.string(),
+    consequence: v.string(),
+    tasks: v.array(
+      v.object({
+        description: v.string(),
+        deadlineHours: v.number(),
+      })
+    ),
+  },
+  handler: async (ctx, args) => {
+    // Find user by Discord ID
+    const user = await ctx.db
+      .query("users")
+      .withIndex("by_discordId", (q) => q.eq("discordId", args.discordId))
+      .unique();
+
+    if (!user) {
+      throw new Error("User not found. Please use /wager in Discord first.");
+    }
+
+    // Link Better Auth ID if not already linked
+    if (user.betterAuthUserId !== args.betterAuthUserId) {
+      await ctx.db.patch(user._id, { betterAuthUserId: args.betterAuthUserId });
+    }
+
+    // Verify the server exists and bot is present
+    const server = await ctx.db
+      .query("discordServers")
+      .withIndex("by_guildId", (q) => q.eq("guildId", args.guildId))
+      .unique();
+
+    if (!server) {
+      throw new Error("Server not found. Please make sure the Wager bot is added to the server.");
+    }
+
+    // Calculate deadlines and find final deadline
+    const now = Date.now();
+    const tasksWithDeadlines = args.tasks.map((task, index) => ({
+      description: task.description,
+      deadline: now + task.deadlineHours * 60 * 60 * 1000,
+      taskIndex: index,
+    }));
+
+    const finalDeadline = Math.max(...tasksWithDeadlines.map((t) => t.deadline));
+
+    // Create the parent wager
+    const wagerId = await ctx.db.insert("wagers", {
+      userId: user._id,
+      guildId: args.guildId,
+      task: args.title, // Use title as the main task description
+      consequence: args.consequence,
+      deadline: finalDeadline, // Use final deadline for backwards compatibility
+      status: "active",
+      createdAt: now,
+      // Multi-task specific fields
+      isMultiTask: true,
+      wagerTitle: args.title,
+      taskCount: args.tasks.length,
+      completedTaskCount: 0,
+      finalDeadline,
+    });
+
+    // Create individual task records
+    for (const task of tasksWithDeadlines) {
+      await ctx.db.insert("wagerTasks", {
+        wagerId,
+        description: task.description,
+        taskIndex: task.taskIndex,
+        deadline: task.deadline,
+        status: "pending",
+      });
+    }
+
+    // Create or update user server stats
+    const existingStats = await ctx.db
+      .query("userServerStats")
+      .withIndex("by_userId_guildId", (q) =>
+        q.eq("userId", user._id).eq("guildId", args.guildId)
+      )
+      .unique();
+
+    if (!existingStats) {
+      await ctx.db.insert("userServerStats", {
+        userId: user._id,
+        guildId: args.guildId,
+        points: 100,
+        totalPointsWon: 0,
+        totalPointsLost: 0,
+        totalBets: 0,
+        correctBets: 0,
+      });
+    }
+
+    return { wagerId, userId: user._id };
   },
 });
 
@@ -512,19 +802,15 @@ export const submitProofFromWeb = mutation({
 export const getGlobalStats = query({
   args: {},
   handler: async (ctx) => {
-    // Get all users for aggregate stats
+    // Count users and compute stats from wagers
     const users = await ctx.db.query("users").collect();
+    const allWagers = await ctx.db.query("wagers").collect();
 
     const totalUsers = users.length;
-    const totalWagers = users.reduce((sum, u) => sum + u.totalWagers, 0);
-    const completedWagers = users.reduce((sum, u) => sum + u.completedWagers, 0);
-    const failedWagers = users.reduce((sum, u) => sum + u.failedWagers, 0);
-
-    // Get active wagers count
-    const activeWagers = await ctx.db
-      .query("wagers")
-      .withIndex("by_status", (q) => q.eq("status", "active"))
-      .collect();
+    const totalWagers = allWagers.length;
+    const completedWagers = allWagers.filter((w) => w.status === "completed").length;
+    const failedWagers = allWagers.filter((w) => w.status === "failed").length;
+    const activeWagersCount = allWagers.filter((w) => w.status === "active").length;
 
     const successRate =
       completedWagers + failedWagers > 0
@@ -535,7 +821,7 @@ export const getGlobalStats = query({
       totalUsers,
       totalWagers,
       completedWagers,
-      activeWagersCount: activeWagers.length,
+      activeWagersCount,
       successRate,
     };
   },
@@ -663,7 +949,7 @@ export const verifyProof = internalAction({
       internal.integrations.claude.verifyProofImage,
       {
         imageUrl: wager.proofImageUrl,
-        task: wager.task,
+        task: getWagerTask(wager),
         consequence: wager.consequence,
       }
     );
@@ -707,6 +993,87 @@ export const updateVerificationResult = internalMutation({
   },
 });
 
+// Helper: Calculate completion reward based on deadline difficulty
+function getCompletionReward(deadline: number, createdAt: number): number {
+  const hoursToComplete = (deadline - createdAt) / (1000 * 60 * 60);
+
+  if (hoursToComplete <= 24) return 50; // Hard - 24h or less
+  if (hoursToComplete <= 48) return 35; // Medium - 24-48h
+  if (hoursToComplete <= 72) return 25; // Standard - 48-72h
+  return 15; // Easy - 72h+
+}
+
+
+// Forfeit/give up a wager (public mutation for web UI)
+export const forfeitWager = mutation({
+  args: {
+    wagerId: v.id("wagers"),
+  },
+  handler: async (ctx, args) => {
+    // Get current user
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) {
+      throw new Error("Not authenticated");
+    }
+
+    const wager = await ctx.db.get(args.wagerId);
+    if (!wager) {
+      throw new Error("Wager not found");
+    }
+
+    if (wager.status !== "active") {
+      throw new Error("Can only forfeit active wagers");
+    }
+
+    // Get user by Better Auth ID
+    const user = await ctx.db
+      .query("users")
+      .withIndex("by_betterAuthUserId", (q) => q.eq("betterAuthUserId", identity.subject))
+      .unique();
+
+    if (!user || user._id !== wager.userId) {
+      throw new Error("You can only forfeit your own wagers");
+    }
+
+    // Update wager status to failed
+    await ctx.db.patch(args.wagerId, {
+      status: "failed",
+      completedAt: Date.now(),
+      verificationResult: {
+        passed: false,
+        confidence: 100,
+        reasoning: "Wager forfeited by creator",
+      },
+    });
+
+    // Settle all bets on this wager
+    await ctx.scheduler.runAfter(0, internal.bets.settleBets, {
+      wagerId: args.wagerId,
+      passed: false,
+    });
+
+    // Apply failure penalty for server points
+    if (wager.guildId) {
+      const creatorStats = await ctx.db
+        .query("userServerStats")
+        .withIndex("by_userId_guildId", (q) =>
+          q.eq("userId", user._id).eq("guildId", wager.guildId!)
+        )
+        .unique();
+
+      if (creatorStats) {
+        const penalty = Math.max(1, Math.floor(creatorStats.points * 0.1));
+        await ctx.db.patch(creatorStats._id, {
+          points: creatorStats.points - penalty,
+          totalPointsLost: creatorStats.totalPointsLost + penalty,
+        });
+      }
+    }
+
+    return { success: true };
+  },
+});
+
 // Complete a wager
 export const completeWager = internalMutation({
   args: {
@@ -726,27 +1093,13 @@ export const completeWager = internalMutation({
       completedAt: Date.now(),
     });
 
-    // Update user stats
-    if (args.passed) {
-      await ctx.db.patch(user._id, {
-        completedWagers: user.completedWagers + 1,
-        currentStreak: user.currentStreak + 1,
-        longestStreak: Math.max(user.longestStreak, user.currentStreak + 1),
-      });
-    } else {
-      await ctx.db.patch(user._id, {
-        failedWagers: user.failedWagers + 1,
-        currentStreak: 0,
-      });
-    }
-
-    // Settle all bets on this wager
+    // Settle all bets on this wager (includes creator cut from fail pool)
     await ctx.scheduler.runAfter(0, internal.bets.settleBets, {
       wagerId: args.wagerId,
       passed: args.passed,
     });
 
-    // Award creator bonus/penalty in their server stats
+    // Award creator completion reward (variable by difficulty)
     if (wager.guildId) {
       const creatorStats = await ctx.db
         .query("userServerStats")
@@ -756,16 +1109,23 @@ export const completeWager = internalMutation({
         .unique();
 
       if (creatorStats) {
-        const bonus = args.passed ? 10 : -5;
-        await ctx.db.patch(creatorStats._id, {
-          points: Math.max(0, creatorStats.points + bonus),
-          totalPointsWon: args.passed
-            ? creatorStats.totalPointsWon + 10
-            : creatorStats.totalPointsWon,
-          totalPointsLost: !args.passed
-            ? creatorStats.totalPointsLost + 5
-            : creatorStats.totalPointsLost,
-        });
+        if (args.passed) {
+          // Calculate variable reward based on deadline difficulty
+          const deadline = wager.isMultiTask ? wager.finalDeadline : wager.deadline;
+          const reward = getCompletionReward(deadline || wager.createdAt + 72 * 60 * 60 * 1000, wager.createdAt);
+
+          await ctx.db.patch(creatorStats._id, {
+            points: creatorStats.points + reward,
+            totalPointsWon: creatorStats.totalPointsWon + reward,
+          });
+        } else {
+          // Failure penalty: 10% of current points
+          const penalty = Math.max(1, Math.floor(creatorStats.points * 0.1));
+          await ctx.db.patch(creatorStats._id, {
+            points: creatorStats.points - penalty,
+            totalPointsLost: creatorStats.totalPointsLost + penalty,
+          });
+        }
       }
     }
   },
@@ -798,7 +1158,7 @@ export const generateResultAudio = internalAction({
         internal.integrations.elevenlabs.generateResultScript,
         {
           username: user.discordDisplayName || user.discordUsername,
-          task: wager.task,
+          task: getWagerTask(wager),
           consequence: wager.consequence,
           isSuccess: args.isSuccess,
           confidence: wager.verificationResult?.confidence || 0,
@@ -881,14 +1241,6 @@ export const checkExpiredWagers = internalMutation({
           completedAt: now,
         });
 
-        const user = await ctx.db.get(wager.userId);
-        if (user) {
-          await ctx.db.patch(user._id, {
-            failedWagers: user.failedWagers + 1,
-            currentStreak: 0,
-          });
-        }
-
         // Settle bets for this failed wager
         await ctx.scheduler.runAfter(0, internal.bets.settleBets, {
           wagerId: wager._id,
@@ -904,5 +1256,77 @@ export const checkExpiredWagers = internalMutation({
     }
 
     return expiredWagers.length;
+  },
+});
+
+// ═══════════════════════════════════════════════════════════════
+// Storage File Management
+// ═══════════════════════════════════════════════════════════════
+
+// Delete a proof file from storage
+export const deleteProofFile = mutation({
+  args: { storageId: v.id("_storage") },
+  handler: async (ctx, args) => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) {
+      throw new Error("Not authenticated");
+    }
+    await ctx.storage.delete(args.storageId);
+  },
+});
+
+// Internal: Delete storage file (for cleanup operations)
+export const deleteStorageFile = internalMutation({
+  args: { storageId: v.id("_storage") },
+  handler: async (ctx, args) => {
+    try {
+      await ctx.storage.delete(args.storageId);
+      return { success: true };
+    } catch (error) {
+      console.error("Failed to delete storage file:", args.storageId, error);
+      return { success: false };
+    }
+  },
+});
+
+// Clean up orphaned storage files (files not linked to any wager or task)
+export const cleanupOrphanedFiles = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    // Get all storage files
+    const allFiles = await ctx.db.system.query("_storage").collect();
+
+    // Get all used storage IDs from wagers
+    const wagers = await ctx.db.query("wagers").collect();
+    const usedIds = new Set<string>();
+
+    for (const wager of wagers) {
+      if (wager.proofStorageId) usedIds.add(wager.proofStorageId);
+      if (wager.resultAudioStorageId) usedIds.add(wager.resultAudioStorageId);
+    }
+
+    // Get all used storage IDs from wager tasks
+    const tasks = await ctx.db.query("wagerTasks").collect();
+    for (const task of tasks) {
+      if (task.proofStorageId) usedIds.add(task.proofStorageId);
+    }
+
+    // Find orphaned files (older than 1 hour to avoid deleting in-progress uploads)
+    const oneHourAgo = Date.now() - 60 * 60 * 1000;
+    let deletedCount = 0;
+
+    for (const file of allFiles) {
+      if (!usedIds.has(file._id) && file._creationTime < oneHourAgo) {
+        try {
+          await ctx.storage.delete(file._id);
+          deletedCount++;
+        } catch (error) {
+          console.error("Failed to delete orphaned file:", file._id, error);
+        }
+      }
+    }
+
+    console.log(`Cleaned up ${deletedCount} orphaned storage files`);
+    return deletedCount;
   },
 });

@@ -205,7 +205,7 @@ export function LiveFeed({ className }: LiveFeedProps) {
                 />
               </div>
 
-              <div className="mt-8 rounded-lg border border-primary/30 bg-primary/5 p-4">
+              <div className="mt-8 rounded-sm border border-primary/30 bg-primary/5 p-4">
                 <p className="text-sm text-foreground">
                   <span className="font-semibold text-primary">Pro tip:</span>{" "}
                   The more specific your task and consequence, the better the AI

@@ -12,10 +12,15 @@ import type * as auth from "../auth.js";
 import type * as bets from "../bets.js";
 import type * as crons from "../crons.js";
 import type * as discord from "../discord.js";
+import type * as discord_components from "../discord/components.js";
+import type * as discord_embeds from "../discord/embeds.js";
 import type * as http from "../http.js";
 import type * as integrations_claude from "../integrations/claude.js";
 import type * as integrations_elevenlabs from "../integrations/elevenlabs.js";
 import type * as leaderboard from "../leaderboard.js";
+import type * as parlays from "../parlays.js";
+import type * as rewards from "../rewards.js";
+import type * as validators from "../validators.js";
 import type * as wagers from "../wagers.js";
 
 import type {
@@ -29,10 +34,15 @@ declare const fullApi: ApiFromModules<{
   bets: typeof bets;
   crons: typeof crons;
   discord: typeof discord;
+  "discord/components": typeof discord_components;
+  "discord/embeds": typeof discord_embeds;
   http: typeof http;
   "integrations/claude": typeof integrations_claude;
   "integrations/elevenlabs": typeof integrations_elevenlabs;
   leaderboard: typeof leaderboard;
+  parlays: typeof parlays;
+  rewards: typeof rewards;
+  validators: typeof validators;
   wagers: typeof wagers;
 }>;
 

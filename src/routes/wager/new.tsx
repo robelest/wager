@@ -3,14 +3,22 @@
 import { createFileRoute, redirect, useNavigate } from "@tanstack/react-router";
 import { useSession } from "~/lib/auth-client";
 import { PageWrapper } from "~/components/layout";
-import { WagerForm, type WagerFormData, type DiscordServer } from "~/components/wager";
+import {
+  WagerForm,
+  MultiTaskWagerForm,
+  type WagerFormData,
+  type MultiTaskWagerFormData,
+  type DiscordServer,
+} from "~/components/wager";
 import { Button } from "~/components/ui/button";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "~/components/ui/tabs";
 import { useState, useEffect } from "react";
 import { toast } from "sonner";
 import { ArrowLeftIcon } from "~/components/ui/arrow-left";
 import { Link } from "@tanstack/react-router";
 import { useQuery, useAction } from "convex/react";
 import { api } from "convex/_generated/api";
+import { Target, ListTodo } from "lucide-react";
 
 export const Route = createFileRoute("/wager/new")({
   beforeLoad: async ({ context }) => {
@@ -27,12 +35,14 @@ function NewWagerPage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [servers, setServers] = useState<DiscordServer[]>([]);
   const [isLoadingServers, setIsLoadingServers] = useState(true);
+  const [wagerType, setWagerType] = useState<"single" | "multi">("single");
 
   // Query to get bot server IDs (for filtering)
   const botServerIds = useQuery(api.wagers.getBotServerIds);
 
-  // Action to create wager
+  // Actions to create wagers
   const createWager = useAction(api.wagers.createWagerFromWeb);
+  const createMultiTaskWager = useAction(api.wagers.createMultiTaskWagerFromWeb);
 
   // Action to get Discord access token
   const getDiscordToken = useAction(api.auth.getDiscordAccessToken);
@@ -127,6 +137,33 @@ function NewWagerPage() {
     }
   };
 
+  const handleMultiTaskSubmit = async (data: MultiTaskWagerFormData) => {
+    setIsSubmitting(true);
+
+    try {
+      const result = await createMultiTaskWager({
+        guildId: data.guildId,
+        title: data.title,
+        consequence: data.consequence,
+        tasks: data.tasks,
+      });
+
+      toast.success("Multi-task wager created!", {
+        description: `${data.tasks.length} tasks committed. Good luck!`,
+      });
+
+      // Navigate to the new wager's detail page
+      navigate({ to: "/wager/$wagerId", params: { wagerId: result.wagerId } });
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "Please try again later.";
+      toast.error("Failed to create wager", {
+        description: errorMessage,
+      });
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
   return (
     <PageWrapper maxWidth="lg">
       <div className="space-y-6">
@@ -146,13 +183,40 @@ function NewWagerPage() {
           </p>
         </div>
 
-        {/* Form */}
-        <WagerForm
-          onSubmit={handleSubmit}
-          isSubmitting={isSubmitting}
-          servers={servers}
-          isLoadingServers={isLoadingServers}
-        />
+        {/* Wager Type Tabs */}
+        <Tabs
+          value={wagerType}
+          onValueChange={(v) => setWagerType(v as "single" | "multi")}
+        >
+          <TabsList className="grid w-full grid-cols-2 max-w-sm">
+            <TabsTrigger value="single" className="gap-2">
+              <Target className="size-4" />
+              Single Task
+            </TabsTrigger>
+            <TabsTrigger value="multi" className="gap-2">
+              <ListTodo className="size-4" />
+              Multi-Task
+            </TabsTrigger>
+          </TabsList>
+
+          <TabsContent value="single" className="mt-6">
+            <WagerForm
+              onSubmit={handleSubmit}
+              isSubmitting={isSubmitting}
+              servers={servers}
+              isLoadingServers={isLoadingServers}
+            />
+          </TabsContent>
+
+          <TabsContent value="multi" className="mt-6">
+            <MultiTaskWagerForm
+              onSubmit={handleMultiTaskSubmit}
+              isSubmitting={isSubmitting}
+              servers={servers}
+              isLoadingServers={isLoadingServers}
+            />
+          </TabsContent>
+        </Tabs>
       </div>
     </PageWrapper>
   );

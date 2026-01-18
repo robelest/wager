@@ -31,7 +31,10 @@ export const verifyProofImage = internalAction({
       }
 
       const imageBuffer = await imageResponse.arrayBuffer();
-      const base64Image = Buffer.from(imageBuffer).toString("base64");
+      // Use web-compatible base64 encoding (Buffer not available in Convex runtime)
+      const base64Image = btoa(
+        String.fromCharCode(...new Uint8Array(imageBuffer))
+      );
       const contentType = imageResponse.headers.get("content-type") || "image/jpeg";
 
       // Map content type to Claude's expected format

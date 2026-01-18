@@ -10,8 +10,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "~/components/ui/tabs";
 import { Skeleton } from "~/components/ui/skeleton";
 import { ScrollArea } from "~/components/ui/scroll-area";
 import { cn } from "~/lib/utils";
-import { FlameIcon } from "~/components/ui/flame";
-import { Trophy, Target, Skull } from "lucide-react";
+import { Trophy, Target, Skull, Users } from "lucide-react";
 
 export const Route = createFileRoute("/leaderboard")({
   component: LeaderboardPage,
@@ -32,13 +31,6 @@ function LeaderboardPage() {
       icon: "trophy" as const,
       data: leaderboardData.mostReliable,
       description: "Highest success rate",
-    },
-    {
-      id: "streak",
-      label: "Longest Streak",
-      icon: "flame" as const,
-      data: leaderboardData.byStreak,
-      description: "Consecutive wins",
     },
     {
       id: "active",
@@ -89,26 +81,21 @@ function LeaderboardPage() {
         )}
 
         {/* Stats Overview */}
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="grid gap-4 sm:grid-cols-3">
           <StatCard
             label="Total Players"
             value={leaderboardData.stats.totalUsers}
-            icon="target"
+            icon="users"
           />
           <StatCard
             label="Total Wagers"
             value={leaderboardData.stats.totalWagers}
-            icon="trophy"
+            icon="target"
           />
           <StatCard
             label="Avg Success Rate"
             value={`${leaderboardData.stats.avgSuccessRate}%`}
-            icon="flame"
-          />
-          <StatCard
-            label="Active Streaks"
-            value={leaderboardData.stats.activeStreaks}
-            icon="flame"
+            icon="trophy"
           />
         </div>
 
@@ -172,14 +159,14 @@ function EmptyState() {
   return <div className="py-16" />;
 }
 
-type CategoryIconType = "trophy" | "flame" | "target" | "skull";
+type CategoryIconType = "trophy" | "users" | "target" | "skull";
 
 function CategoryIcon({ icon, className }: { icon: CategoryIconType; className?: string }) {
   switch (icon) {
     case "trophy":
       return <Trophy className={cn("size-5", className)} />;
-    case "flame":
-      return <FlameIcon size={20} className={className} />;
+    case "users":
+      return <Users className={cn("size-5", className)} />;
     case "target":
       return <Target className={cn("size-5", className)} />;
     case "skull":
@@ -231,8 +218,7 @@ function LeaderboardSkeleton() {
           <Skeleton className="h-5 w-96 mx-auto" />
         </div>
         <Skeleton className="h-80" />
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          <Skeleton className="h-24" />
+        <div className="grid gap-4 sm:grid-cols-3">
           <Skeleton className="h-24" />
           <Skeleton className="h-24" />
           <Skeleton className="h-24" />

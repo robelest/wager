@@ -21,7 +21,7 @@ export const createAuth = (ctx: any) => {
     },
     socialProviders: {
       discord: {
-        clientId: process.env.DISCORD_CLIENT_ID!,
+        clientId: process.env.PUBLIC_DISCORD_CLIENT_ID!,
         clientSecret: process.env.DISCORD_CLIENT_SECRET!,
         scope: ["identify", "guilds"], // Request guilds scope for server discovery
         prompt: "consent", // Force consent screen to ensure refresh token is issued
@@ -65,6 +65,39 @@ export const getDiscordAccessToken = action({
     return {
       accessToken: account.accessToken || null,
       error: account.accessToken ? undefined : "Token not stored",
+    };
+  },
+});
+
+// Get current user's Discord account info (for betting)
+export const getDiscordAccountInfo = action({
+  args: {},
+  handler: async (ctx): Promise<{
+    discordId: string | null;
+    username: string | null;
+    error?: string;
+  }> => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) {
+      return { discordId: null, username: null, error: "Not authenticated" };
+    }
+
+    // Query Better Auth's account table directly
+    const account = await ctx.runQuery(components.betterAuth.adapter.findOne, {
+      model: "account",
+      where: [
+        { field: "providerId", operator: "eq", value: "discord" },
+        { field: "userId", operator: "eq", value: identity.subject },
+      ],
+    });
+
+    if (!account || !account.accountId) {
+      return { discordId: null, username: null, error: "No Discord account found" };
+    }
+
+    return {
+      discordId: account.accountId as string,
+      username: identity.name || identity.nickname || "Unknown",
     };
   },
 });

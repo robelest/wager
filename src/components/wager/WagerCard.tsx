@@ -13,9 +13,11 @@ import { AlertCircle, XCircle, ImagePlus } from "lucide-react";
 
 export interface Wager {
   _id: string;
-  task: string;
+  task?: string;
+  wagerTitle?: string;
   consequence: string;
-  deadline: number;
+  deadline?: number;
+  finalDeadline?: number;
   status: "pending" | "active" | "completed" | "failed" | "cancelled";
   createdAt: number;
   proofImageUrl?: string;
@@ -24,6 +26,16 @@ export interface Wager {
     confidence: number;
     reasoning: string;
   };
+}
+
+// Helper to get display task (handles multi-task wagers)
+function getWagerTask(wager: Wager): string {
+  return wager.task || wager.wagerTitle || "Unknown task";
+}
+
+// Helper to get deadline (handles multi-task wagers)
+function getWagerDeadline(wager: Wager): number {
+  return wager.deadline || wager.finalDeadline || Date.now();
 }
 
 interface WagerCardProps {
@@ -76,8 +88,9 @@ export function WagerCard({
   showActions = true,
 }: WagerCardProps) {
   const config = statusConfig[wager.status];
-  const timeRemaining = getTimeRemaining(wager.deadline);
-  const progress = getProgress(wager.createdAt, wager.deadline);
+  const deadline = getWagerDeadline(wager);
+  const timeRemaining = getTimeRemaining(deadline);
+  const progress = getProgress(wager.createdAt, deadline);
   const isUrgent = wager.status === "active" && timeRemaining.hours < 24;
 
   return (
@@ -104,7 +117,7 @@ export function WagerCard({
         <div className="flex items-start justify-between gap-3">
           <div className="flex-1 min-w-0">
             <h3 className="font-semibold text-base line-clamp-2 group-hover:text-primary transition-colors">
-              {wager.task}
+              {getWagerTask(wager)}
             </h3>
           </div>
           <Badge variant="outline" className={cn("shrink-0", config.className)}>

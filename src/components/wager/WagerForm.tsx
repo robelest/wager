@@ -171,11 +171,23 @@ export function WagerForm({
                         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary" />
                       </div>
                     ) : servers.length === 0 ? (
-                      <div className="rounded-lg border border-warning/20 bg-warning/5 p-4 text-center">
+                      <div className="rounded-sm border border-warning/20 bg-warning/5 p-4 text-center space-y-3">
                         <p className="text-sm text-muted-foreground">
-                          No Discord servers found. Make sure the Wager bot is installed in at least
-                          one of your servers.
+                          No Discord servers found. Add the Wager bot to a server to get started.
                         </p>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => window.open(
+                            `https://discord.com/oauth2/authorize?client_id=${import.meta.env.PUBLIC_DISCORD_CLIENT_ID}&permissions=277025467456&scope=bot%20applications.commands`,
+                            '_blank'
+                          )}
+                          className="gap-2"
+                        >
+                          <Server className="size-4" />
+                          Add Bot to Server
+                        </Button>
                       </div>
                     ) : (
                       <div className="grid gap-3">
@@ -185,7 +197,7 @@ export function WagerForm({
                             type="button"
                             onClick={() => field.handleChange(server.guildId)}
                             className={cn(
-                              "flex items-center justify-between p-4 rounded-lg border transition-all text-left",
+                              "flex items-center justify-between p-4 rounded-sm border transition-all text-left",
                               field.state.value === server.guildId
                                 ? "border-primary bg-primary/10 ring-1 ring-primary"
                                 : "border-border/50 hover:border-primary/50 hover:bg-muted/50"
@@ -213,7 +225,7 @@ export function WagerForm({
                       </div>
                     )}
                   </div>
-                  <div className="rounded-lg border border-primary/20 bg-primary/5 p-4">
+                  <div className="rounded-sm border border-primary/20 bg-primary/5 p-4">
                     <p className="text-sm">
                       <span className="font-semibold text-primary">Note:</span> Your wager will be
                       posted to the configured wagers channel in the selected server.
@@ -249,7 +261,7 @@ export function WagerForm({
                       </span>
                     </div>
                   </div>
-                  <div className="rounded-lg border border-primary/20 bg-primary/5 p-4">
+                  <div className="rounded-sm border border-primary/20 bg-primary/5 p-4">
                     <p className="text-sm">
                       <span className="font-semibold text-primary">Tip:</span> The more specific
                       your task, the easier it is for AI to verify your proof.
@@ -334,7 +346,7 @@ export function WagerForm({
                     </div>
                   </div>
 
-                  <div className="rounded-lg border border-border/50 bg-background/50 p-4">
+                  <div className="rounded-sm border border-border/50 bg-background/50 p-4">
                     <p className="text-sm text-muted-foreground">
                       Your deadline will be:{" "}
                       <span className="font-medium text-foreground">
@@ -357,7 +369,7 @@ export function WagerForm({
                 deadlineHours={form.state.values.deadlineHours}
               />
 
-              <div className="rounded-lg border border-warning/20 bg-warning/5 p-4">
+              <div className="rounded-sm border border-warning/20 bg-warning/5 p-4">
                 <p className="text-sm">
                   <span className="font-semibold text-warning">Warning:</span> Once created, this
                   wager will be publicly visible on{" "}
@@ -498,7 +510,7 @@ function WagerPreview({
         <h3 className="font-semibold">{task || "Your task will appear here"}</h3>
       </CardHeader>
       <CardContent className="pt-0">
-        <div className="rounded-lg border border-border/50 bg-background/50 p-3">
+        <div className="rounded-sm border border-border/50 bg-background/50 p-3">
           <div className="flex items-center gap-2 text-xs text-muted-foreground mb-1">
             <AlertCircle className="size-3" />
             <span>If failed:</span>
